@@ -126,7 +126,7 @@ pub fn register_debugfs(dev: &mut R92suDevice, wiphy: *mut core::ffi::c_void) {
     if dentry.is_null() {
         pr_warn!("r92su: failed to create debugfs entries\n");
     } else {
-        pr_info!("r92su: debugfs entries created\n");
+        pr_debug!("r92su: debugfs entries created\n");
     }
 }
 
@@ -142,6 +142,6 @@ pub fn unregister_debugfs(dev: &mut R92suDevice) {
         }
         dev.debugfs_dentry = core::ptr::null_mut();
         dev.debugfs_registered = false;
-        pr_info!("r92su: debugfs entries removed\n");
+        pr_debug!("r92su: debugfs entries removed\n");
     }
 }

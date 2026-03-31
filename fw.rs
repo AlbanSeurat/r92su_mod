@@ -146,7 +146,7 @@ impl FirmwareInfo {
             let ptr = firmware.as_ptr().add(2) as *const u16;
             u16::from_le(ptr.read_unaligned())
         };
-        pr_info!("r92su: firmware version: 0x{:04x}\n", fw_version);
+        pr_debug!("r92su: firmware version: 0x{:04x}\n", fw_version);
 
         // SAFETY: Read imem_size at offset 8.
         let imem_size = unsafe {
@@ -301,13 +301,13 @@ pub fn upload_firmware(
     upload_dmem(dev, &fw_priv)?;
 
     dev.fw_loaded = true;
-    pr_info!("r92su: firmware upload complete\n");
+    pr_debug!("r92su: firmware upload complete\n");
     Ok(())
 }
 
 /// Upload IMEM (instruction memory) segment.
 fn upload_imem(dev: &mut R92suDevice, imem: &[u8]) -> Result<()> {
-    pr_info!("r92su: uploading IMEM ({} bytes)\n", imem.len());
+    pr_debug!("r92su: uploading IMEM ({} bytes)\n", imem.len());
 
     let chunks = imem.chunks(BLOCK_SIZE);
     let total_chunks = chunks.len();
@@ -320,13 +320,13 @@ fn upload_imem(dev: &mut R92suDevice, imem: &[u8]) -> Result<()> {
     // Wait for IMEM code to complete
     wait_for_firmware(dev, IMEM_CODE_DONE, IMEM_CHK_RPT, "IMEM")?;
 
-    pr_info!("r92su: IMEM upload complete\n");
+    pr_debug!("r92su: IMEM upload complete\n");
     Ok(())
 }
 
 /// Upload SRAM (static RAM) segment and enable CPU.
 fn upload_sram(dev: &mut R92suDevice, sram: &[u8]) -> Result<()> {
-    pr_info!("r92su: uploading SRAM ({} bytes)\n", sram.len());
+    pr_debug!("r92su: uploading SRAM ({} bytes)\n", sram.len());
 
     let chunks = sram.chunks(BLOCK_SIZE);
     let total_chunks = chunks.len();
@@ -342,13 +342,13 @@ fn upload_sram(dev: &mut R92suDevice, sram: &[u8]) -> Result<()> {
     // Enable CPU
     enable_cpu(dev)?;
 
-    pr_info!("r92su: SRAM upload complete\n");
+    pr_debug!("r92su: SRAM upload complete\n");
     Ok(())
 }
 
 /// Upload DMEM (data memory) - the fw_priv structure.
 fn upload_dmem(dev: &mut R92suDevice, fw_priv: &FwPriv) -> Result<()> {
-    pr_info!("r92su: uploading DMEM\n");
+    pr_debug!("r92su: uploading DMEM\n");
 
     let dmem_bytes: &[u8] = unsafe {
         core::slice::from_raw_parts(
@@ -370,7 +370,7 @@ fn upload_dmem(dev: &mut R92suDevice, fw_priv: &FwPriv) -> Result<()> {
     for _ in 0..tries {
         let status = unsafe { hw_read8(dev.udev, REG_TCR) };
         if status & FWRDY != 0 {
-            pr_info!("r92su: firmware boot ready\n");
+            pr_debug!("r92su: firmware boot ready\n");
             return Ok(());
         }
         // Check for EEPROM boot (slower)

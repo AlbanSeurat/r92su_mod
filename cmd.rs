@@ -451,7 +451,7 @@ fn build_tx_desc(buf: &mut [u8; TX_DESC_SIZE], pkt_size: usize) {
 /// device is probed and before any H2C commands are submitted.
 pub fn cmd_init(dev: &mut R92suDevice) {
     dev.h2c_seq = 1;
-    pr_info!("r92su: cmd_init: H2C sequence reset to 1\n");
+    pr_debug!("r92su: cmd_init: H2C sequence reset to 1\n");
 }
 
 // ---------------------------------------------------------------------------

@@ -817,7 +817,7 @@ pub fn r92su_rx(dev: &mut R92suDevice, buf: &[u8]) {
         let hdr_len = RX_DESC_SIZE + drvinfo;
 
         if pos + hdr_len + shift + pkt_len > max_len {
-            pr_info!("r92su rx: clipped frame at pos={}\n", pos);
+            pr_debug!("r92su rx: clipped frame at pos={}\n", pos);
             break;
         }
 

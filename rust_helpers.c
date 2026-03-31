@@ -190,7 +190,7 @@ struct cfg80211_bss *rust_helper_cfg80211_inform_bss_data(
 	};
 
 	return cfg80211_inform_bss_data(wiphy, &data,
-		CFG80211_BSS_FTYPE_UNKNOWN, bssid, tsf,
+		CFG80211_BSS_FTYPE_BEACON, bssid, tsf,
 		capability, beacon_interval, ie, ielen, gfp);
 }
 EXPORT_SYMBOL_GPL(rust_helper_cfg80211_inform_bss_data);
@@ -785,6 +785,137 @@ void rust_helper_kill_rx_urbs(void)
 	r92su_rx_dev_ptr = NULL;
 }
 EXPORT_SYMBOL_GPL(rust_helper_kill_rx_urbs);
+
+/* ---------------------------------------------------------------------------
+ * TX URB infrastructure
+ *
+ * Submits bulk-out URBs for transmitting frames.  The completion handler calls
+ * back into Rust via the registered tx_complete_fn, then triggers the TX
+ * scheduler to submit the next pending URB.
+ * ---------------------------------------------------------------------------
+ */
+
+#define R92SU_MAX_TX_URBS  16
+#define R92SU_TX_BUF_SIZE  32768
+
+struct r92su_tx_ctx {
+	struct urb *urb;
+	u8 *buf;
+};
+
+static struct r92su_tx_ctx r92su_tx_urb_pool[R92SU_MAX_TX_URBS];
+static int r92su_n_tx_urbs;
+
+static void (*r92su_tx_complete_fn)(void *dev_ptr);
+static void *r92su_tx_dev_ptr;
+
+/**
+ * r92su_tx_complete - URB completion handler for TX.
+ *
+ * Calls the registered completion callback (if any), then re-arms the TX
+ * scheduler to submit the next pending URB.
+ */
+static void r92su_tx_complete(struct urb *urb)
+{
+	if (r92su_tx_complete_fn)
+		r92su_tx_complete_fn(r92su_tx_dev_ptr);
+}
+
+/**
+ * rust_helper_set_tx_complete_fn - register the TX completion callback.
+ *
+ * @fn_ptr:  called from TX URB completion with (dev_ptr)
+ * @dev_ptr: opaque R92suDevice pointer forwarded to every @fn_ptr call
+ */
+void rust_helper_set_tx_complete_fn(void (*fn_ptr)(void *dev_ptr),
+				    void *dev_ptr)
+{
+	r92su_tx_complete_fn   = fn_ptr;
+	r92su_tx_dev_ptr       = dev_ptr;
+}
+EXPORT_SYMBOL_GPL(rust_helper_set_tx_complete_fn);
+
+/**
+ * rust_helper_submit_one_tx_urb - submit a single TX URB.
+ *
+ * @udev:     the USB device
+ * @endpoint: bEndpointAddress of the bulk-out endpoint (direction bit set)
+ * @data:     data to transmit
+ * @len:      length of data
+ *
+ * Returns 0 on success, negative errno on failure.
+ */
+int rust_helper_submit_one_tx_urb(struct usb_device *udev, u8 endpoint,
+				  const u8 *data, size_t len)
+{
+	struct r92su_tx_ctx *ctx = NULL;
+	int i, err;
+	unsigned int pipe;
+
+	/* Find an available slot in the pool. */
+	for (i = 0; i < R92SU_MAX_TX_URBS; i++) {
+		if (!r92su_tx_urb_pool[i].urb)
+			break;
+	}
+	if (i >= R92SU_MAX_TX_URBS)
+		return -ENOMEM;
+
+	ctx = &r92su_tx_urb_pool[i];
+
+	ctx->buf = kmalloc(len, GFP_ATOMIC);
+	if (!ctx->buf)
+		return -ENOMEM;
+
+	memcpy(ctx->buf, data, len);
+
+	ctx->urb = usb_alloc_urb(0, GFP_ATOMIC);
+	if (!ctx->urb) {
+		kfree(ctx->buf);
+		ctx->buf = NULL;
+		return -ENOMEM;
+	}
+
+	pipe = usb_sndbulkpipe(udev, endpoint & USB_ENDPOINT_NUMBER_MASK);
+	usb_fill_bulk_urb(ctx->urb, udev, pipe,
+			  ctx->buf, len, r92su_tx_complete, ctx);
+
+	err = usb_submit_urb(ctx->urb, GFP_ATOMIC);
+	if (err) {
+		usb_free_urb(ctx->urb);
+		ctx->urb = NULL;
+		kfree(ctx->buf);
+		ctx->buf = NULL;
+		return err;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(rust_helper_submit_one_tx_urb);
+
+/**
+ * rust_helper_kill_tx_urbs - cancel all pending TX URBs.
+ *
+ * Safe to call even if no URBs were submitted.  Called on device disconnect.
+ */
+void rust_helper_kill_tx_urbs(void)
+{
+	int i;
+
+	for (i = 0; i < R92SU_MAX_TX_URBS; i++) {
+		struct r92su_tx_ctx *ctx = &r92su_tx_urb_pool[i];
+
+		if (ctx->urb) {
+			usb_kill_urb(ctx->urb);
+			usb_free_urb(ctx->urb);
+			ctx->urb = NULL;
+		}
+		kfree(ctx->buf);
+		ctx->buf = NULL;
+	}
+	r92su_tx_complete_fn = NULL;
+	r92su_tx_dev_ptr    = NULL;
+}
+EXPORT_SYMBOL_GPL(rust_helper_kill_tx_urbs);
 
 /* ---------------------------------------------------------------------------
  * TX path — ndo_start_xmit dispatch to Rust

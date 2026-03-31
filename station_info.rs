@@ -180,5 +180,5 @@ pub fn init() {
         rust_helper_set_cfg80211_ops_get_station(Some(get_station_callback));
         rust_helper_set_cfg80211_ops_dump_station(Some(dump_station_callback));
     }
-    pr_info!("r92su: station info operations initialized\n");
+    pr_debug!("r92su: station info operations initialized\n");
 }

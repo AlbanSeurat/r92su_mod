@@ -220,7 +220,7 @@ extern "C" fn connect_callback(wiphy: *mut c_void, _ndev: *mut c_void, sme: *mut
 
     match cmd::h2c_connect(dev, &mut bss, true, ie_opt) {
         Ok(()) => {
-            pr_info!(
+            pr_debug!(
                 "r92su: H2C_JOINBSS_CMD sent (ssid_len={} privacy={})\n",
                 ssid_len,
                 privacy
@@ -248,7 +248,7 @@ extern "C" fn disconnect_callback(wiphy: *mut c_void, ndev: *mut c_void, reason:
     // SAFETY: dev_ptr is valid for the USB interface lifetime.
     let dev = unsafe { &mut *dev_ptr };
 
-    pr_info!("r92su: disconnect callback reason={}\n", reason);
+    pr_debug!("r92su: disconnect callback reason={}\n", reason);
 
     let _ = cmd::h2c_disconnect(dev);
     dev.set_state(State::Open);
@@ -350,7 +350,10 @@ extern "C" fn join_result_process(dev_ptr: *mut c_void) {
 
     let status: u16 = if firmware_joined {
         dev.set_state(State::Connected);
-        pr_info!("r92su: join BSS succeeded — reporting connected\n");
+        if let Err(e) = cmd::h2c_set_power_mode(dev, 1, 0) {
+            pr_warn!("r92su: failed to set power mode: {:?}\n", e);
+        }
+        pr_debug!("r92su: join BSS succeeded — reporting connected\n");
         0 // WLAN_STATUS_SUCCESS
     } else {
         pr_warn!("r92su: join BSS failed — reporting failure\n");
@@ -400,5 +403,5 @@ pub fn init() {
         rust_helper_set_cfg80211_ops_connect(Some(connect_callback));
         rust_helper_set_cfg80211_ops_disconnect(Some(disconnect_callback));
     }
-    pr_info!("r92su: connect subsystem initialized\n");
+    pr_debug!("r92su: connect subsystem initialized\n");
 }

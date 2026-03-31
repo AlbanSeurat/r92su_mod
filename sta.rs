@@ -331,7 +331,7 @@ impl R92suDevice {
         self.sta_num += 1;
         self.sta_generation = self.sta_generation.wrapping_add(1);
 
-        pr_info!(
+        pr_debug!(
             "r92su: sta_alloc mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} \
              mac_id={} aid={} total={}\n",
             mac_addr[0],
@@ -397,7 +397,7 @@ impl R92suDevice {
 
             self.sta_num = self.sta_num.saturating_sub(1);
             self.sta_generation = self.sta_generation.wrapping_add(1);
-            pr_info!("r92su: sta_del mac_id={}\n", mac_id);
+            pr_debug!("r92su: sta_del mac_id={}\n", mac_id);
         }
     }
 
@@ -486,7 +486,7 @@ pub fn sta_alloc_tid(sta: &mut R92suSta, tid: u8, ssn: u16) {
     };
 
     sta.rx_tid[idx] = Some(new_tid);
-    pr_info!("r92su: sta_alloc_tid tid={} ssn={:#06x}\n", tid, ssn);
+    pr_debug!("r92su: sta_alloc_tid tid={} ssn={:#06x}\n", tid, ssn);
 }
 
 /// Free the RX TID reorder state for a station, flushing any buffered frames.

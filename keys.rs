@@ -195,7 +195,7 @@ extern "C" fn add_key_callback(
         dev.group_keys[idx] = Some(new_key);
     }
 
-    pr_info!(
+    pr_debug!(
         "r92su: add_key idx={} pairwise={} cipher={:#010x}\n",
         key_index,
         pairwise,
@@ -264,7 +264,7 @@ extern "C" fn del_key_callback(
         dev.group_keys[idx] = None;
     }
 
-    pr_info!("r92su: del_key idx={} pairwise={}\n", key_index, pairwise);
+    pr_debug!("r92su: del_key idx={} pairwise={}\n", key_index, pairwise);
     0
 }
 
@@ -300,7 +300,7 @@ extern "C" fn set_default_key_callback(
         dev.def_multi_key_idx = key_index;
     }
 
-    pr_info!(
+    pr_debug!(
         "r92su: set_default_key idx={} unicast={} multicast={}\n",
         key_index,
         unicast,
@@ -321,5 +321,5 @@ pub fn init() {
         rust_helper_set_cfg80211_ops_del_key(Some(del_key_callback));
         rust_helper_set_cfg80211_ops_set_default_key(Some(set_default_key_callback));
     }
-    pr_info!("r92su: key management initialized\n");
+    pr_debug!("r92su: key management initialized\n");
 }

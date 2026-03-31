@@ -23,6 +23,20 @@ extern "C" {
         n_urbs: i32,
     ) -> i32;
 
+    fn rust_helper_set_tx_complete_fn(
+        fn_ptr: Option<extern "C" fn(*mut c_void)>,
+        dev_ptr: *mut c_void,
+    );
+
+    fn rust_helper_submit_one_tx_urb(
+        udev: *mut kernel::bindings::usb_device,
+        endpoint: u8,
+        data: *const u8,
+        len: usize,
+    ) -> i32;
+
+    fn rust_helper_kill_tx_urbs();
+
     fn rust_helper_set_ndo_start_xmit(
         fn_ptr: Option<extern "C" fn(*mut c_void, *const u8, usize) -> i32>,
     );
@@ -46,6 +60,16 @@ extern "C" fn rx_complete_callback(dev_ptr: *mut c_void, data: *const u8, len: u
     let dev = unsafe { &mut *(dev_ptr as *mut R92suDevice) };
     let buf = unsafe { core::slice::from_raw_parts(data, len) };
     rx::r92su_rx(dev, buf);
+}
+
+extern "C" fn tx_complete_callback(dev_ptr: *mut c_void) {
+    if dev_ptr.is_null() {
+        return;
+    }
+    // SAFETY: dev_ptr was stored via rust_helper_set_tx_complete_fn in r92su_open
+    // and is valid for the lifetime of the USB interface.
+    let dev = unsafe { &mut *(dev_ptr as *mut R92suDevice) };
+    // TODO: implement TX completion handling (stats, wake TX queue, etc.)
 }
 
 extern "C" fn ndo_open_callback(dev_ptr: *mut c_void) -> i32 {
@@ -78,7 +102,7 @@ pub fn ndo_open_init() {
     unsafe {
         rust_helper_set_ndo_open(Some(ndo_open_callback));
     }
-    pr_info!("r92su: ndo_open callback registered\n");
+    pr_debug!("r92su: ndo_open callback registered\n");
 }
 
 // ── r92su_open ────────────────────────────────────────────────────────────────
@@ -105,7 +129,7 @@ pub fn r92su_open(dev: &mut R92suDevice, firmware: &[u8]) -> Result<()> {
         pr_err!("r92su_open: hw_early_mac_setup failed: {}\n", e);
         e
     })?;
-    pr_info!("r92su_open: early MAC setup complete\n");
+    pr_debug!("r92su_open: early MAC setup complete\n");
 
     fw::upload_firmware(
         dev,
@@ -118,25 +142,25 @@ pub fn r92su_open(dev: &mut R92suDevice, firmware: &[u8]) -> Result<()> {
         pr_err!("r92su_open: firmware upload failed: {}\n", e);
         e
     })?;
-    pr_info!("r92su_open: firmware uploaded ({} bytes)\n", firmware.len());
+    pr_debug!("r92su_open: firmware uploaded ({} bytes)\n", firmware.len());
 
     cmd::cmd_init(dev);
-    pr_info!("r92su_open: command subsystem initialized\n");
+    pr_debug!("r92su_open: command subsystem initialized\n");
 
     hw_late_mac_setup(dev).map_err(|e| {
         pr_err!("r92su_open: hw_late_mac_setup failed: {}\n", e);
         e
     })?;
-    pr_info!("r92su_open: late MAC setup complete\n");
+    pr_debug!("r92su_open: late MAC setup complete\n");
 
     init_mac(dev).map_err(|e| {
         pr_err!("r92su_open: init_mac failed: {}\n", e);
         e
     })?;
-    pr_info!("r92su_open: MAC initialized\n");
+    pr_debug!("r92su_open: MAC initialized\n");
 
     dev.set_state(State::Open);
-    pr_info!("r92su_open: device opened successfully\n");
+    pr_debug!("r92su_open: device opened successfully\n");
 
     // Register the RX callback and submit bulk-in URBs so the driver can
     // receive C2H firmware events (Survey, SurveyDone, etc.).
@@ -152,13 +176,19 @@ pub fn r92su_open(dev: &mut R92suDevice, firmware: &[u8]) -> Result<()> {
         if ret < 0 {
             pr_err!("r92su_open: failed to submit RX URBs (err={})\n", ret);
         } else {
-            pr_info!(
+            pr_debug!(
                 "r92su_open: 8 RX URBs submitted on ep={:#04x}\n",
                 ep.address
             );
         }
     } else {
         pr_err!("r92su_open: no bulk-in endpoint; RX URBs not submitted\n");
+    }
+
+    // Register the TX completion callback for async URB-based transmission.
+    // SAFETY: dev is valid for the USB interface lifetime.
+    unsafe {
+        rust_helper_set_tx_complete_fn(Some(tx_complete_callback), dev_ptr);
     }
 
     Ok(())
@@ -198,8 +228,12 @@ extern "C" fn ndo_stop_callback(dev_ptr: *mut c_void) -> i32 {
     // SAFETY: safe to call even if no URBs are active.
     unsafe { rust_helper_kill_rx_urbs() };
 
+    // Kill all pending TX URBs.
+    // SAFETY: safe to call even if no URBs are active.
+    unsafe { rust_helper_kill_tx_urbs() };
+
     dev.set_state(State::Stop);
-    pr_info!("r92su: interface stopped\n");
+    pr_debug!("r92su: interface stopped\n");
     0
 }
 
@@ -212,5 +246,5 @@ pub fn ndo_xmit_stop_init() {
         rust_helper_set_ndo_start_xmit(Some(start_xmit_callback));
         rust_helper_set_ndo_stop(Some(ndo_stop_callback));
     }
-    pr_info!("r92su: ndo_start_xmit and ndo_stop callbacks registered\n");
+    pr_debug!("r92su: ndo_start_xmit and ndo_stop callbacks registered\n");
 }

@@ -591,7 +591,7 @@ pub fn r92su_tx(dev: &mut R92suDevice, frame: &[u8], mac_id: usize) -> Result<()
     dev.tx_packets += 1;
     dev.tx_bytes += pkt_size as u64;
 
-    pr_info!(
+    pr_debug!(
         "r92su tx: {} bytes queued (mac_id={})\n",
         pkt_size,
         effective_mac_id

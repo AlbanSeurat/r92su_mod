@@ -89,7 +89,7 @@ const EFUSE_REAL_SIZE: u16 = 512;
 // no allocation is required here.
 // ---------------------------------------------------------------------------
 fn rx_init(_dev: &mut R92suDevice) {
-    pr_info!("r92su_rx_init: RX subsystem initialized\n");
+    pr_debug!("r92su_rx_init: RX subsystem initialized\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -125,7 +125,7 @@ fn read_chip_version(dev: &mut R92suDevice) -> Result<()> {
         _ => return Err(R92suError::Io("unknown chip revision")),
     };
 
-    pr_info!("r92su: chip revision: {:?}\n", dev.chip_rev);
+    pr_debug!("r92su: chip revision: {:?}\n", dev.chip_rev);
     Ok(())
 }
 
@@ -314,7 +314,7 @@ fn parse_eeprom(dev: &mut R92suDevice) -> Result<()> {
         }
     };
 
-    pr_info!("r92su: rf_type: {:?}\n", dev.rf_type);
+    pr_debug!("r92su: rf_type: {:?}\n", dev.rf_type);
     Ok(())
 }
 
@@ -337,7 +337,7 @@ fn read_eeprom(dev: &mut R92suDevice) -> Result<()> {
     dev.mac_addr = dev.eeprom.mac_addr();
 
     let mac = dev.mac_addr;
-    pr_info!(
+    pr_debug!(
         "r92su: EEPROM MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
         mac[0],
         mac[1],
@@ -430,7 +430,7 @@ fn init_band(dev: &mut R92suDevice) -> Result<()> {
         dev.band_2ghz.rx_highest,
     );
 
-    pr_info!(
+    pr_debug!(
         "r92su: 2.4 GHz band: {} channels, {} rates, HT={}\n",
         dev.band_2ghz.n_channels,
         dev.band_2ghz.n_bitrates,
@@ -484,7 +484,7 @@ fn alloc_netdev(dev: &mut R92suDevice, parent_dev: *mut c_void) -> Result<()> {
 
     dev.wdev = Some(wdev);
     dev.netdev = Some(netdev);
-    pr_info!("r92su: wireless_dev and net_device allocated\n");
+    pr_debug!("r92su: wireless_dev and net_device allocated\n");
     Ok(())
 }
 
@@ -536,7 +536,7 @@ pub fn r92su_setup(dev: &mut R92suDevice, parent_dev: *mut c_void) -> Result<()>
     // dev.mac_addr; already set by read_eeprom(), but mirror the C assignment.
     dev.mac_addr = dev.eeprom.mac_addr();
 
-    pr_info!(
+    pr_debug!(
         "r92su_setup: complete (MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x})\n",
         dev.mac_addr[0],
         dev.mac_addr[1],

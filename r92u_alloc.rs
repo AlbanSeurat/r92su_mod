@@ -154,7 +154,7 @@ pub fn r92su_alloc(vendor_id: u16, product_id: u16, disable_ht: bool) -> Result<
     // r92su_hw_init(): INIT_DELAYED_WORK(&r92su->service_work, …)
     dev.service_work_scheduled = false;
 
-    pr_info!(
+    pr_debug!(
         "r92su_alloc: device {:04x}:{:04x} allocated (disable_ht={})\n",
         vendor_id,
         product_id,
