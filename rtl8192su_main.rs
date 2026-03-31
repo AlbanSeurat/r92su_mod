@@ -7,9 +7,13 @@
 
 mod anchor;
 pub mod cfg80211;
+mod cfg80211_misc;
 mod cmd;
+mod connect;
+mod debugfs;
 mod event;
 mod fw;
+mod keys;
 mod netdev;
 mod r92u;
 mod r92u_alloc;
@@ -17,6 +21,7 @@ mod r92u_open;
 mod rx;
 mod scan;
 mod sta;
+mod station_info;
 mod tx;
 mod usb_probe;
 mod usb_register;

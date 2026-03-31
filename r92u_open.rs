@@ -22,6 +22,14 @@ extern "C" {
         endpoint: u8,
         n_urbs: i32,
     ) -> i32;
+
+    fn rust_helper_set_ndo_start_xmit(
+        fn_ptr: Option<extern "C" fn(*mut c_void, *const u8, usize) -> i32>,
+    );
+
+    fn rust_helper_set_ndo_stop(fn_ptr: Option<extern "C" fn(*mut c_void) -> i32>);
+
+    fn rust_helper_kill_rx_urbs();
 }
 
 /// USB bulk-in completion callback — called from the C RX URB completion
@@ -140,17 +148,69 @@ pub fn r92su_open(dev: &mut R92suDevice, firmware: &[u8]) -> Result<()> {
     }
     if let Some(ep) = dev.bulk_in {
         // SAFETY: dev.udev is valid (set during probe, lives until disconnect).
-        let ret = unsafe {
-            rust_helper_submit_rx_urbs(dev.udev, ep.address, 8)
-        };
+        let ret = unsafe { rust_helper_submit_rx_urbs(dev.udev, ep.address, 8) };
         if ret < 0 {
             pr_err!("r92su_open: failed to submit RX URBs (err={})\n", ret);
         } else {
-            pr_info!("r92su_open: 8 RX URBs submitted on ep={:#04x}\n", ep.address);
+            pr_info!(
+                "r92su_open: 8 RX URBs submitted on ep={:#04x}\n",
+                ep.address
+            );
         }
     } else {
         pr_err!("r92su_open: no bulk-in endpoint; RX URBs not submitted\n");
     }
 
     Ok(())
+}
+
+// ── ndo_start_xmit / ndo_stop ─────────────────────────────────────────────────
+
+/// Called from C `r92su_ndo_start_xmit_dispatch` with raw Ethernet frame bytes.
+///
+/// Invoked in softirq (TX queue) context; must not sleep.
+extern "C" fn start_xmit_callback(dev_ptr: *mut c_void, data: *const u8, len: usize) -> i32 {
+    if dev_ptr.is_null() || data.is_null() || len == 0 {
+        return 0;
+    }
+    // SAFETY: dev_ptr was stored during device allocation; data/len come from the skb.
+    let dev = unsafe { &mut *(dev_ptr as *mut R92suDevice) };
+    let eth = unsafe { core::slice::from_raw_parts(data, len) };
+    match crate::tx::tx_from_ethernet(dev, eth) {
+        Ok(()) => 0,
+        Err(_) => -5, // -EIO
+    }
+}
+
+/// Called from C `r92su_ndo_stop_impl` when the interface is brought down.
+extern "C" fn ndo_stop_callback(dev_ptr: *mut c_void) -> i32 {
+    if dev_ptr.is_null() {
+        return -19; // -ENODEV
+    }
+    // SAFETY: dev_ptr is valid for the USB interface lifetime.
+    let dev = unsafe { &mut *(dev_ptr as *mut R92suDevice) };
+
+    if dev.state == State::Connected {
+        let _ = cmd::h2c_disconnect(dev);
+    }
+
+    // Kill all active RX URBs so the bulk-in pipe is drained.
+    // SAFETY: safe to call even if no URBs are active.
+    unsafe { rust_helper_kill_rx_urbs() };
+
+    dev.set_state(State::Stop);
+    pr_info!("r92su: interface stopped\n");
+    0
+}
+
+/// Register the TX and stop callbacks with the C netdev_ops.
+///
+/// Must be called once during probe, before the net_device is registered.
+pub fn ndo_xmit_stop_init() {
+    // SAFETY: start_xmit_callback and ndo_stop_callback are valid extern "C" fns.
+    unsafe {
+        rust_helper_set_ndo_start_xmit(Some(start_xmit_callback));
+        rust_helper_set_ndo_stop(Some(ndo_stop_callback));
+    }
+    pr_info!("r92su: ndo_start_xmit and ndo_stop callbacks registered\n");
 }

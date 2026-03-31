@@ -10,6 +10,7 @@
 
 use kernel::prelude::*;
 
+use crate::connect;
 use crate::r92u::{R92suDevice, State};
 use crate::scan;
 use crate::sta; //
@@ -274,6 +275,10 @@ fn c2h_join_bss_event(dev: &mut R92suDevice, payload: &[u8], raw_len: u16) {
     }
     dev.connect_result = Some(v);
     pr_info!("r92su: join BSS result stored ({} bytes)\n", copy_len);
+
+    // Schedule process-context delivery to cfg80211.  cfg80211_connect_result
+    // must not be called from softirq context, so we defer via a workqueue.
+    connect::schedule_join_result(dev);
 }
 
 fn c2h_add_sta_event(dev: &mut R92suDevice, payload: &[u8]) {
@@ -305,6 +310,7 @@ fn c2h_del_sta_event(dev: &mut R92suDevice, payload: &[u8]) {
     if dev.iftype == NL80211_IFTYPE_STATION {
         // In STA mode the "del sta" event means we've been disconnected.
         dev.connect_result = None;
+        dev.connect_req_ie.clear();
         dev.scan_done = false;
         pr_info!("r92su: disconnected from BSS\n");
     } else {

@@ -29,6 +29,7 @@
 
 use kernel::prelude::*;
 
+use crate::debugfs;
 use crate::r92u::{R92suDevice, R92suError, Result, State}; //
 
 // ---------------------------------------------------------------------------
@@ -82,8 +83,14 @@ fn register_netdev(dev: &mut R92suDevice) -> Result<()> {
 // individual file entries for tx_pending_urbs, chip_rev, rf_type, eeprom, etc.
 // ---------------------------------------------------------------------------
 fn register_debugfs(dev: &mut R92suDevice) -> Result<()> {
-    dev.debugfs_registered = true;
-    pr_info!("r92su: debugfs entries created\n");
+    let wiphy_ptr = {
+        let wiphy = dev
+            .wiphy
+            .as_mut()
+            .ok_or(R92suError::Io("wiphy not allocated"))?;
+        wiphy.as_ptr()
+    };
+    debugfs::register_debugfs(dev, wiphy_ptr);
     Ok(())
 }
 
@@ -111,10 +118,7 @@ fn unregister_wps_button(_dev: &mut R92suDevice) {
 // C: debugfs_remove_recursive(r92su->dfs)
 // ---------------------------------------------------------------------------
 fn unregister_debugfs(dev: &mut R92suDevice) {
-    if dev.debugfs_registered {
-        dev.debugfs_registered = false;
-        pr_info!("r92su: debugfs entries removed\n");
-    }
+    debugfs::unregister_debugfs(dev);
 }
 
 // ---------------------------------------------------------------------------

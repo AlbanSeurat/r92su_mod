@@ -97,8 +97,9 @@ pub enum Auth1x {
 #[repr(u8)]
 pub enum OpMode {
     Auto = 0,
-    Adhoc = 1,
+    AdHoc = 1,
     Infra = 2,
+    Monitor = 3,
 }
 
 // ---------------------------------------------------------------------------

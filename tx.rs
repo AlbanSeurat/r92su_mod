@@ -599,6 +599,70 @@ pub fn r92su_tx(dev: &mut R92suDevice, frame: &[u8], mac_id: usize) -> Result<()
     Ok(())
 }
 
+/// Convert an Ethernet II frame to 802.11 and transmit it.
+///
+/// `eth_data` is the raw Ethernet frame (dst[6] + src[6] + ethertype[2] + payload).
+/// Called from `ndo_start_xmit` via the C dispatch shim.
+///
+/// Mirrors `r92su_tx_add_80211()` from `tx.c` (the manual construction path).
+pub fn tx_from_ethernet(dev: &mut R92suDevice, eth_data: &[u8]) -> Result<()> {
+    const ETH_HDR_LEN: usize = 14;
+    if eth_data.len() < ETH_HDR_LEN {
+        return Err(crate::r92u::R92suError::Io("ethernet frame too short"));
+    }
+
+    // Parse Ethernet header.
+    let mut dst_mac = [0u8; 6];
+    let mut src_mac = [0u8; 6];
+    dst_mac.copy_from_slice(&eth_data[0..6]);
+    src_mac.copy_from_slice(&eth_data[6..12]);
+    let ethertype_hi = eth_data[12];
+    let ethertype_lo = eth_data[13];
+    let payload = &eth_data[ETH_HDR_LEN..];
+
+    // Build 802.11 data frame in infrastructure STA mode (ToDS=1, FromDS=0).
+    // Frame control: type=data(0b10), ToDS=1 → FC = 0x0108
+    // Addr1 = BSSID (receiver = AP), Addr2 = SA, Addr3 = DA
+    //
+    // Layout: [FC(2)][Dur(2)][Addr1/BSSID(6)][Addr2/SA(6)][Addr3/DA(6)]
+    //         [SeqCtrl(2)][LLC-SNAP(8)][payload]
+    const DOT11_HDR_LEN: usize = 24;
+    const LLC_SNAP_LEN: usize = 8;
+    let total = DOT11_HDR_LEN + LLC_SNAP_LEN + payload.len();
+
+    let mut frame: KVec<u8> = KVec::from_elem(0u8, total, GFP_KERNEL)
+        .map_err(|_| crate::r92u::R92suError::UrbAllocFailed)?;
+
+    // FC = 0x0108 (data, ToDS=1)
+    frame[0] = 0x08;
+    frame[1] = 0x01;
+    // Duration (bytes 2–3) = 0
+    // Addr1 = BSSID
+    frame[4..10].copy_from_slice(&dev.bssid);
+    // Addr2 = SA (our MAC)
+    frame[10..16].copy_from_slice(&dev.mac_addr);
+    // Addr3 = DA
+    frame[16..22].copy_from_slice(&dst_mac);
+    // SeqCtrl (bytes 22–23) = 0; firmware fills hardware sequence counter
+
+    // LLC/SNAP header: AA AA 03 00 00 00 [EtherType(2)]
+    frame[24] = 0xAA;
+    frame[25] = 0xAA;
+    frame[26] = 0x03;
+    // OUI = 00:00:00 (RFC 1042 encapsulation)
+    frame[27] = 0x00;
+    frame[28] = 0x00;
+    frame[29] = 0x00;
+    frame[30] = ethertype_hi;
+    frame[31] = ethertype_lo;
+
+    // Copy payload (skip Ethernet header; LLC/SNAP replaces it).
+    frame[DOT11_HDR_LEN + LLC_SNAP_LEN..].copy_from_slice(payload);
+
+    // Use station 0 (the AP / BSSID entry).
+    r92su_tx(dev, &frame, 0)
+}
+
 /// Transmit a frame injected via a monitor-mode interface.
 ///
 /// Strips the radiotap header (if present) and forwards to [`r92su_tx`].

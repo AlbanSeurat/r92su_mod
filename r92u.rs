@@ -5,7 +5,7 @@ use kernel::{bindings, prelude::*}; //
 
 use crate::cfg80211::Wiphy; //
 use crate::netdev::{NetDev, WirelessDev}; //
-use crate::sta::R92suSta; //
+use crate::sta::{R92suKey, R92suSta}; //
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -205,6 +205,33 @@ pub unsafe fn hw_read16(udev: *mut bindings::usb_device, addr: u16) -> u16 {
         0xffff
     } else {
         u16::from_le_bytes(buf)
+    }
+}
+
+/// Write four bytes (little-endian) to a hardware register via USB vendor
+/// control transfer.
+///
+/// # Safety
+///
+/// `udev` must be valid; same requirements as [`hw_read8`].
+pub unsafe fn hw_write32(udev: *mut bindings::usb_device, addr: u16, val: u32) {
+    let buf = val.to_le_bytes();
+    let ret = unsafe {
+        bindings::usb_control_msg_send(
+            udev,
+            0,
+            VENQT_CMD_REQ,
+            VENQT_WRITE,
+            addr,
+            VENQT_CMD_IDX,
+            buf.as_ptr() as *const core::ffi::c_void,
+            4,
+            USB_CTRL_TIMEOUT,
+            bindings::GFP_KERNEL,
+        )
+    };
+    if ret < 0 {
+        pr_warn!("r92su: hw_write32({:#06x}) failed: {}\n", addr, ret);
     }
 }
 
@@ -564,6 +591,61 @@ impl HwRegs {
 }
 
 // ---------------------------------------------------------------------------
+// Debug ring buffer (mirrors r92su_debug from debugfs.h)
+// ---------------------------------------------------------------------------
+
+const R92SU_DEBUG_RING_SIZE: usize = 64;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum DebugMemType {
+    Mem8 = 0,
+    Mem16 = 1,
+    Mem32 = 2,
+}
+
+#[derive(Clone, Copy)]
+pub struct DebugMemRbe {
+    pub reg: u32,
+    pub value: u32,
+    pub mem_type: DebugMemType,
+}
+
+pub struct Debug {
+    pub ring: [DebugMemRbe; R92SU_DEBUG_RING_SIZE],
+    pub ring_head: usize,
+    pub ring_tail: usize,
+    pub ring_len: usize,
+}
+
+impl Debug {
+    fn new() -> Self {
+        Self {
+            ring: [DebugMemRbe {
+                reg: 0,
+                value: 0,
+                mem_type: DebugMemType::Mem8,
+            }; R92SU_DEBUG_RING_SIZE],
+            ring_head: 0,
+            ring_tail: 0,
+            ring_len: 0,
+        }
+    }
+
+    pub fn add_read(&mut self, reg: u32, value: u32, mem_type: DebugMemType) {
+        self.ring[self.ring_tail] = DebugMemRbe {
+            reg,
+            value,
+            mem_type,
+        };
+        self.ring_tail = (self.ring_tail + 1) % R92SU_DEBUG_RING_SIZE;
+        if self.ring_len < R92SU_DEBUG_RING_SIZE {
+            self.ring_len += 1;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Device struct — owns all initialised state
 // ---------------------------------------------------------------------------
 
@@ -619,6 +701,11 @@ pub struct R92suDevice {
     // Fields set by r92su_register() / cleared by r92su_unregister().
     pub wiphy_registered: bool,
     pub debugfs_registered: bool,
+    /// Pointer to debugfs dentry (created by rust_helper_debugfs_create).
+    pub debugfs_dentry: *mut core::ffi::c_void,
+
+    /// Debug ring buffer for register I/O tracing (mirrors r92su->debug).
+    pub debug: Debug,
 
     // Wiphy / cfg80211 configuration — set by r92su_alloc().
     /// NL80211_IFTYPE_* value for the primary interface (wdev.iftype).
@@ -696,6 +783,33 @@ pub struct R92suDevice {
 
     /// Firmware image — set during probe so that ndo_open can upload it.
     pub firmware: &'static [u8],
+
+    // ── Key management ────────────────────────────────────────────────────────
+    /// Group (broadcast/multicast) keys — indexed by cfg80211 key index 0–3.
+    ///
+    /// Mirrors `bss_priv->group_key[]` from the C reference.
+    pub group_keys: [Option<KBox<R92suKey>>; 4],
+    /// Default multicast key index (updated by `set_default_key` with multicast=true).
+    pub def_multi_key_idx: u8,
+    /// Default unicast key index (updated by `set_default_key` with unicast=true).
+    pub def_uni_key_idx: u8,
+
+    // ── Connection state ──────────────────────────────────────────────────────
+    /// BSSID of the currently associated AP (zeroed when not connected).
+    pub bssid: [u8; 6],
+    /// Current operating channel (1–14 for 2.4 GHz; default 1).
+    pub channel: u8,
+    /// IEs sent in the most recent connect request (stored for cfg80211_connect_result).
+    pub connect_req_ie: KVec<u8>,
+    /// SSID from the most recent connect request (used for BSS lookup in join result).
+    pub connect_ssid: [u8; 32],
+    /// Length of `connect_ssid` (0 when no connect is pending).
+    pub connect_ssid_len: usize,
+    /// Raw pointer to the `struct net_device` associated with this interface.
+    ///
+    /// Set by `r92su_register` after `register_netdev` succeeds.  Used by the
+    /// RX delivery path to call `netif_rx` without a wiphy lookup.
+    pub netdev_ptr: *mut core::ffi::c_void,
 }
 
 impl R92suDevice {
@@ -724,6 +838,8 @@ impl R92suDevice {
             band_2ghz: Band2GHz::new(),
             wiphy_registered: false,
             debugfs_registered: false,
+            debugfs_dentry: core::ptr::null_mut(),
+            debug: Debug::new(),
             iftype: 0,
             interface_modes: 0,
             max_scan_ssids: 0,
@@ -748,6 +864,15 @@ impl R92suDevice {
             tx_bytes: 0,
             tx_dropped: 0,
             firmware: &[],
+            group_keys: [None, None, None, None],
+            def_multi_key_idx: 0,
+            def_uni_key_idx: 0,
+            bssid: [0u8; 6],
+            channel: 1,
+            connect_req_ie: KVec::new(),
+            connect_ssid: [0u8; 32],
+            connect_ssid_len: 0,
+            netdev_ptr: core::ptr::null_mut(),
         }
     }
 }
@@ -1303,10 +1428,7 @@ fn usb_init_b_and_c_cut(dev: &mut R92suDevice) -> Result<()> {
         udelay(5);
         tries -= 1;
         if tries == 0 {
-            pr_err!(
-                "r92su: TXDMA_INIT_VALUE timed out! TCR={:#04x}\n",
-                tmp8
-            );
+            pr_err!("r92su: TXDMA_INIT_VALUE timed out! TCR={:#04x}\n", tmp8);
             // Reset TxDMA so it can accept firmware.
             let cr = unsafe { hw_read8(dev.udev, REG_CR) };
             unsafe { hw_write8(dev.udev, REG_CR, cr & !(TXDMA_EN as u8)) };
@@ -1353,7 +1475,18 @@ pub fn cmd_init(_dev: &mut R92suDevice) {
 }
 
 const REG_TCR: u16 = 0x0044;
+// REG_RCR is used by the simulated HwRegs in upload_finish; the real USB address
+// for direct hardware access is REG_RCR_ADDR.
 const REG_RCR: u16 = 0x0400;
+/// Real USB vendor-control address for the Receive Configuration Register.
+///
+/// RTL8712_CMDCTRL_ + 0x0008 = 0x10250040 + 0x0008 = 0x10250048.
+/// The USB wValue field carries the lower 16 bits: 0x0048.
+const REG_RCR_ADDR: u16 = 0x0048;
+const REG_RXFLTMAP0: u16 = 0x0116; // RTL8712_FIFOCTRL_ + 0x76
+const REG_RXFLTMAP1: u16 = 0x0118; // RTL8712_FIFOCTRL_ + 0x78
+const REG_RXFLTMAP2: u16 = 0x011a; // RTL8712_FIFOCTRL_ + 0x7A
+const REG_IOCMD_CTRL: u16 = 0x0370; // RTL8712_IOCMD_ + 0x00
 const REG_LBKMD_SEL: u16 = 0x04a7;
 const REG_PBP: u16 = 0x0004;
 const REG_RXDMA_RXCTRL: u16 = 0x0c60;
@@ -1442,6 +1575,30 @@ const STOPHCCA: u16 = 0x0040;
 const HAL_8192S_HW_GPIO_WPS_BIT: u8 = 0x10;
 
 const TCR_ICV: u32 = 0x00000001;
+
+// ---------------------------------------------------------------------------
+// RCR bit values for direct hardware access (hw_mac_set_rx_filter).
+//
+// These match the C reference (reg.h), using the physical bit positions in
+// the RTL8712 Receive Configuration Register.  They are distinct from the
+// RCR_* constants above which are used with the simulated `HwRegs` and
+// carry different (incorrect) bit assignments.
+// ---------------------------------------------------------------------------
+const RCR_HW_AAP: u32 = 1 << 0; // Accept All Physical dest
+const RCR_HW_AB: u32 = 1 << 1; // Accept Broadcast
+const RCR_HW_AM: u32 = 1 << 2; // Accept Multicast
+const RCR_HW_APM: u32 = 1 << 3; // Accept Physical Match
+const RCR_HW_APWRMGT: u32 = 1 << 4; // Accept power-mgmt frames
+const RCR_HW_AICV: u32 = 1 << 7; // Accept ICV-error frames
+const RCR_HW_APP_ICV: u32 = 1 << 16; // Append ICV to Rx
+const RCR_HW_APP_MIC: u32 = 1 << 17; // Append MIC to Rx
+const RCR_HW_ADF: u32 = 1 << 18; // Accept Data Frames
+const RCR_HW_ACF: u32 = 1 << 19; // Accept Control Frames
+const RCR_HW_AMF: u32 = 1 << 20; // Accept Management Frames
+const RCR_HW_CBSSID: u32 = 1 << 23; // Check BSSID
+const RCR_HW_APP_PHYST_STAFF: u32 = 1 << 24; // Append PHY status
+const RCR_HW_APP_PHYST_RXFF: u32 = 1 << 25; // Append PHY status RxFF
+const RCR_HW_APPFCS: u32 = 1 << 31; // Append FCS
 const RCR_APP_PHYST_RXFF: u32 = 0x40000000;
 const RCR_APP_ICV: u32 = 0x20000000;
 const RCR_APP_MIC: u32 = 0x10000000;
@@ -1457,6 +1614,86 @@ const RCR_AB: u32 = 0x00000002;
 const RCR_AM: u32 = 0x00000004;
 const RCR_APM: u32 = 0x00000080;
 const RCR_APP_PHYST_STAFF: u32 = 0x00000200;
+
+/// Issue a firmware I/O command and wait for completion.
+///
+/// Writes `cmd` to `REG_IOCMD_CTRL` then polls until the register reads back
+/// as zero (firmware acknowledges).  Times out after 25 × 20 ms = 500 ms.
+///
+/// Mirrors `r92su_fw_iocmd()` from `cmd.c`.
+pub fn fw_iocmd(dev: &mut R92suDevice, cmd: u32) -> Result<()> {
+    unsafe { hw_write32(dev.udev, REG_IOCMD_CTRL, cmd) };
+    let mut tries = 25u32;
+    loop {
+        mdelay(20);
+        tries -= 1;
+        if tries == 0 {
+            return Err(R92suError::Io("fw_iocmd timed out"));
+        }
+        let val = unsafe { hw_read32(dev.udev, REG_IOCMD_CTRL) };
+        if val == 0 {
+            break;
+        }
+    }
+    Ok(())
+}
+
+/// Configure the hardware RX packet filter.
+///
+/// Sets RCR, RXFLTMAP0/1/2 to accept the appropriate frame types for the
+/// current operating mode.
+///
+/// Mirrors `r92su_hw_mac_set_rx_filter()` from `hw.c`.
+pub fn hw_mac_set_rx_filter(
+    dev: &mut R92suDevice,
+    data: bool,
+    all_mgt: bool,
+    ctrl: bool,
+    monitor: bool,
+) -> Result<()> {
+    let mut rcr = unsafe { hw_read32(dev.udev, REG_RCR_ADDR) };
+
+    if data {
+        rcr |= RCR_HW_ADF;
+    } else {
+        rcr &= !RCR_HW_ADF;
+    }
+    if ctrl {
+        rcr |= RCR_HW_ACF;
+    } else {
+        rcr &= !RCR_HW_ACF;
+    }
+
+    rcr |= RCR_HW_AMF;
+
+    if monitor {
+        rcr |= RCR_HW_AAP | RCR_HW_CBSSID;
+    } else {
+        rcr &= !(RCR_HW_AAP | RCR_HW_CBSSID);
+    }
+
+    rcr |= RCR_HW_APPFCS
+        | RCR_HW_APWRMGT
+        | RCR_HW_APP_MIC
+        | RCR_HW_APP_ICV
+        | RCR_HW_AICV
+        | RCR_HW_AB
+        | RCR_HW_AM
+        | RCR_HW_APM
+        | RCR_HW_APP_PHYST_STAFF;
+
+    unsafe { hw_write32(dev.udev, REG_RCR_ADDR, rcr) };
+
+    // RXFLTMAP: a cleared bit allows that frame subtype through.
+    unsafe {
+        hw_write16(dev.udev, REG_RXFLTMAP2, if data { 0 } else { 0xffff });
+        hw_write16(dev.udev, REG_RXFLTMAP1, if ctrl { 0 } else { 0xffff });
+        // RXFLTMAP0 affects firmware scan; set to let beacon/probe frames through.
+        hw_write16(dev.udev, REG_RXFLTMAP0, if all_mgt { 0 } else { 0x3f3f });
+    }
+
+    Ok(())
+}
 
 fn upload_finish(dev: &mut R92suDevice) -> Result<()> {
     let mut cr = dev.regs.read8(REG_TCR as u16) as u32;
@@ -1515,18 +1752,41 @@ pub fn hw_late_mac_setup(dev: &mut R92suDevice) -> Result<()> {
 }
 
 pub fn init_mac(dev: &mut R92suDevice) -> Result<()> {
-    // Set up RX filter - accept all data, management, control frames and monitor mode
-    // This is done via firmware command in the full implementation
-    // For now, the hardware is already configured in hw_late_mac_setup
+    // Configure hardware RX filter: accept data + management, no control, no monitor.
+    // Mirrors r92su_hw_mac_set_rx_filter(r92su, data=true, all_mgt=false, ctrl=false, mntr=false).
+    hw_mac_set_rx_filter(dev, true, false, false, false).map_err(|e| {
+        pr_err!("r92su_init_mac: hw_mac_set_rx_filter failed: {}\n", e);
+        e
+    })?;
 
-    // The following would be done via H2C commands in a complete implementation:
-    // - r92su_hw_mac_set_rx_filter() - configure which frames to accept
-    // - r92su_fw_iocmd(0xf4000700) - enable 40MHz mode and STBC
-    // - r92su_h2c_set_opmode() - set infrastructure/adhoc/monitor mode
-    // - r92su_h2c_set_mac_addr() - set MAC address from EEPROM
-    // - r92su_h2c_set_channel() - set the operating channel
+    // Enable 40 MHz mode (bit 9), STBC (bit 10), video mode to 96B AP (bit 8).
+    // Mirrors: r92su_fw_iocmd(r92su, 0xf4000700)
+    fw_iocmd(dev, 0xf4000700).map_err(|e| {
+        pr_err!("r92su_init_mac: fw_iocmd failed: {}\n", e);
+        e
+    })?;
 
-    pr_info!("r92su_init_mac: MAC initialization complete\n");
+    // Set operation mode to infrastructure (station).
+    crate::cmd::h2c_set_opmode(dev, crate::cmd::OpMode::Infra).map_err(|e| {
+        pr_err!("r92su_init_mac: h2c_set_opmode failed: {}\n", e);
+        e
+    })?;
+
+    // Set MAC address from EEPROM.
+    let mac = dev.mac_addr;
+    crate::cmd::h2c_set_mac_addr(dev, &mac).map_err(|e| {
+        pr_err!("r92su_init_mac: h2c_set_mac_addr failed: {}\n", e);
+        e
+    })?;
+
+    // Set initial channel.
+    let ch = dev.channel as u32;
+    crate::cmd::h2c_set_channel(dev, ch).map_err(|e| {
+        pr_err!("r92su_init_mac: h2c_set_channel failed: {}\n", e);
+        e
+    })?;
+
+    pr_info!("r92su_init_mac: MAC initialized (channel={})\n", ch);
     dev.set_state(State::Init);
     Ok(())
 }

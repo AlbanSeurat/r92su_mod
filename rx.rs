@@ -21,11 +21,21 @@
 //! `dev.pending_rx` for later consumption once `netif_rx()` bindings are
 //! available.  All other steps are functionally complete.
 
+use core::ffi::c_void;
+
 use kernel::prelude::*;
 
 use crate::event; //
 use crate::r92u::{R92suDevice, State}; //
 use crate::sta; //
+
+extern "C" {
+    /// Deliver a 802.11 data frame to the network stack.
+    ///
+    /// Converts the 802.11 frame to 802.3 via `ieee80211_data_to_8023()` and
+    /// then calls `netif_rx()`.  Returns 0 on success, negative errno on error.
+    fn rust_helper_rx_deliver_80211(ndev: *mut c_void, data: *const u8, len: usize) -> i32;
+}
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -650,18 +660,30 @@ fn rx_defrag(
 
 /// Deliver a processed 802.11 frame to the network stack.
 ///
-/// Currently queues the frame onto `dev.pending_rx`.  Once `netif_rx()` /
-/// `eth_type_trans()` / SKB Rust bindings are available this is where
-/// `netif_receive_skb()` would be called.
+/// If a cached `netdev_ptr` is available the frame is converted to 802.3
+/// via `rust_helper_rx_deliver_80211()` and passed to `netif_rx()`.
+/// If no netdev is available yet the frame is queued in `pending_rx` for
+/// later delivery (e.g. during a scan before the device is fully open).
 ///
 /// Mirrors `r92su_rx_deliver()` / `__r92su_rx_deliver()`.
 fn rx_deliver(dev: &mut R92suDevice, frame: KVec<u8>) {
     dev.rx_bytes += frame.len() as u64;
     dev.rx_packets += 1;
-    // TODO: ieee80211_data_to_8023() then netif_receive_skb() once bindings
-    // are available.  For now, store in pending_rx for userspace inspection.
-    if dev.pending_rx.push(frame, GFP_ATOMIC).is_err() {
-        dev.rx_dropped += 1;
+
+    if !dev.netdev_ptr.is_null() && dev.is_open() {
+        // SAFETY: netdev_ptr was set from rust_helper_get_netdev_ptr() after
+        // register_netdev() and is valid for the lifetime of the interface.
+        // frame.as_ptr() / frame.len() are valid for the duration of this call.
+        let ret =
+            unsafe { rust_helper_rx_deliver_80211(dev.netdev_ptr, frame.as_ptr(), frame.len()) };
+        if ret < 0 {
+            dev.rx_dropped += 1;
+        }
+    } else {
+        // Device not yet open or no netdev — buffer the frame.
+        if dev.pending_rx.push(frame, GFP_ATOMIC).is_err() {
+            dev.rx_dropped += 1;
+        }
     }
 }
 

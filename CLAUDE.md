@@ -157,3 +157,8 @@ unsafe impl kernel::sync::aref::AlwaysRefCounted for MyStruct {
 - Use `#[kunit_tests(suite_name)]` attribute for unit tests
 - Use doctests (`/// ```rust ... ```) for documentation examples
 - Assert with standard `assert!` and `assert_eq!` macros (mapped to KUnit)
+
+
+## Claude specific 
+
+When exiting plan mode to begin implementation, ALWAYS save the implementation plan first as a markdown file in docs/

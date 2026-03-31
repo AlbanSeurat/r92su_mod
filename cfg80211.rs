@@ -115,6 +115,66 @@ extern "C" {
 
     /// `rust_helper_wiphy_get_channel` — get ieee80211_channel by channel number.
     fn rust_helper_wiphy_get_channel(wiphy: *mut c_void, ch_num: u8) -> *mut c_void;
+
+    /// `rust_helper_set_cfg80211_ops_get_station` — set the .get_station callback.
+    fn rust_helper_set_cfg80211_ops_get_station(
+        fn_ptr: Option<extern "C" fn(*mut c_void, *mut c_void, *const u8, *mut c_void) -> c_int>,
+    );
+
+    /// `rust_helper_set_cfg80211_ops_dump_station` — set the .dump_station callback.
+    fn rust_helper_set_cfg80211_ops_dump_station(
+        fn_ptr: Option<
+            extern "C" fn(*mut c_void, *mut c_void, c_int, *mut u8, *mut c_void) -> c_int,
+        >,
+    );
+
+    /// `rust_helper_set_cfg80211_ops_change_virtual_intf` — set the .change_virtual_intf callback.
+    fn rust_helper_set_cfg80211_ops_change_virtual_intf(
+        fn_ptr: Option<extern "C" fn(*mut c_void, *mut c_void, c_int, *mut c_void) -> c_int>,
+    );
+
+    /// `rust_helper_set_cfg80211_ops_join_ibss` — set the .join_ibss callback.
+    fn rust_helper_set_cfg80211_ops_join_ibss(
+        fn_ptr: Option<extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> c_int>,
+    );
+
+    /// `rust_helper_set_cfg80211_ops_leave_ibss` — set the .leave_ibss callback.
+    fn rust_helper_set_cfg80211_ops_leave_ibss(
+        fn_ptr: Option<extern "C" fn(*mut c_void, *mut c_void) -> c_int>,
+    );
+
+    /// `rust_helper_set_cfg80211_ops_set_wiphy_params` — set the .set_wiphy_params callback.
+    fn rust_helper_set_cfg80211_ops_set_wiphy_params(
+        fn_ptr: Option<extern "C" fn(*mut c_void, c_int, u32) -> c_int>,
+    );
+
+    /// `rust_helper_set_cfg80211_ops_set_monitor_channel` — set the .set_monitor_channel callback.
+    fn rust_helper_set_cfg80211_ops_set_monitor_channel(
+        fn_ptr: Option<extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> c_int>,
+    );
+
+    /// `rust_helper_debugfs_create` — create debugfs entries for the device.
+    pub fn rust_helper_debugfs_create(dev: *mut c_void, wiphy: *mut c_void) -> *mut c_void;
+
+    /// `rust_helper_debugfs_remove` — remove debugfs entries.
+    pub fn rust_helper_debugfs_remove(dfs: *mut c_void);
+
+    /// `rust_helper_debug_ring_add` — add a register read to the debug ring.
+    pub fn rust_helper_debug_ring_add(ring: *mut c_void, reg: u32, value: u32, mem_type: c_int);
+
+    /// `rust_helper_debugfs_set_callbacks` — register Rust callbacks for debugfs reads.
+    pub fn rust_helper_debugfs_set_callbacks(
+        dev_ptr: *mut c_void,
+        get_tx_pending_urbs: Option<extern "C" fn(*mut c_void) -> c_int>,
+        get_chip_rev: Option<extern "C" fn(*mut c_void) -> c_int>,
+        get_rf_type: Option<extern "C" fn(*mut c_void) -> c_int>,
+        get_eeprom_type: Option<extern "C" fn(*mut c_void) -> c_int>,
+        get_h2c_seq: Option<extern "C" fn(*mut c_void) -> u8>,
+        get_c2h_seq: Option<extern "C" fn(*mut c_void) -> u8>,
+        get_cpwm: Option<extern "C" fn(*mut c_void) -> u8>,
+        get_rpwm: Option<extern "C" fn(*mut c_void) -> u8>,
+        get_rx_queue_len: Option<extern "C" fn(*mut c_void) -> c_int>,
+    );
 }
 
 // ---------------------------------------------------------------------------

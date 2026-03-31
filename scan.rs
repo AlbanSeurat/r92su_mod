@@ -183,8 +183,8 @@ pub fn complete_scan(dev: &mut R92suDevice) {
         inform_bss(wiphy, bss_data);
     }
 
-    // Clear the BSS list.
-    dev.add_bss_pending.clear();
+    // Keep add_bss_pending intact so the connect callback can look up the BSS.
+    // It is cleared at the start of the next scan (in scan_callback).
 
     pr_info!(
         "r92su: calling cfg80211_scan_done (request={:p})\n",
@@ -211,22 +211,25 @@ fn inform_bss(wiphy: *mut c_void, bss_data: &[u8]) {
         return;
     }
 
-    // Parse the BSS structure (mirrors ndis_wlan_bssid_ex).
-    // Fixed fields start at offset 0:
-    //   u32 length (total length including IEs)
-    //   u8  macaddr[6]
-    //   u8  ssid[32]
-    //   u32 ssid_len
-    //   u32 privacy
-    //   u32 rssi
-    //   ... (more fields)
-    //   u32 ie_length
-    //   u8  ies[]
+    // Parse the BSS structure (mirrors H2cc2hBss / ndis_wlan_bssid_ex).
+    // Key offsets (all little-endian u32 unless noted):
+    //   0:   length (total struct + variable IEs)
+    //   4:   bssid  [u8; 6]
+    //   12:  ssid.length (u32)
+    //   16:  ssid.ssid   [u8; 32]
+    //   52:  rssi
+    //   72:  config.frequency (channel number, 1-14)
+    //   112: ie_length (= sizeof(H2cFixedIes) + variable IE bytes)
+    //   116: H2cFixedIes { timestamp(8), beacon_int(2), caps(2) }
+    //   128: variable IEs (802.11 TLV format, excluding SSID which is above)
 
     let bssid_offset = 4;
+    let ssid_len_offset = 12;
+    let ssid_bytes_offset = 16;
     let rssi_offset = 52;
     let ie_length_offset = 112;
-    let freq_offset = 60;
+    // config.frequency is at offset 72 (after length/beacon_period/atim_window at 60/64/68).
+    let freq_offset = 72;
 
     // SAFETY: We check bounds before accessing offsets.
     let bssid_ptr = unsafe { bss_data.as_ptr().add(bssid_offset) };
@@ -257,12 +260,50 @@ fn inform_bss(wiphy: *mut c_void, bss_data: &[u8]) {
     // Beacon interval is at offset 124 (H2cFixedIes.beacon_int).
     let beacon_interval = u16::from_le_bytes([bss_data[124], bss_data[125]]);
 
-    // Variable IEs start after H2cFixedIes (offset 116 + 12 = 128).
+    // Build combined IEs: prepend a proper SSID IE (type=0) from the fixed SSID
+    // field, then append the firmware's variable IEs.  The firmware stores SSID
+    // in a fixed struct field (offset 12–48) and does NOT include an SSID IE in
+    // the variable section.  Without a synthesised SSID IE, cfg80211 stores the
+    // BSS with an empty SSID, causing cfg80211_get_bss() to fail during connect.
     const VARIABLE_IES_OFFSET: usize = 128;
-    let ies_offset = VARIABLE_IES_OFFSET;
-    // SAFETY: We check bounds before accessing.
-    let ies_ptr = if bss_data.len() > ies_offset {
-        unsafe { bss_data.as_ptr().add(ies_offset) }
+    // Extract SSID from fixed field.
+    let fixed_ssid_len = if bss_data.len() >= ssid_bytes_offset + 32 {
+        u32::from_le_bytes([
+            bss_data[ssid_len_offset],
+            bss_data[ssid_len_offset + 1],
+            bss_data[ssid_len_offset + 2],
+            bss_data[ssid_len_offset + 3],
+        ]) as usize
+    } else {
+        0
+    };
+    let fixed_ssid_len = fixed_ssid_len.min(32);
+
+    // Combine SSID IE + variable IEs into a fixed-size stack buffer.
+    // Max SSID IE = 2 + 32 = 34 bytes; cap variable IEs at 512 bytes.
+    const VAR_IE_CAP: usize = 512;
+    let mut combined_buf = [0u8; 34 + VAR_IE_CAP];
+    let mut combined_len = 0usize;
+
+    // Synthesise SSID IE.
+    if fixed_ssid_len > 0 && bss_data.len() >= ssid_bytes_offset + fixed_ssid_len {
+        combined_buf[0] = 0; // SSID element ID
+        combined_buf[1] = fixed_ssid_len as u8;
+        combined_buf[2..2 + fixed_ssid_len]
+            .copy_from_slice(&bss_data[ssid_bytes_offset..ssid_bytes_offset + fixed_ssid_len]);
+        combined_len = 2 + fixed_ssid_len;
+    }
+
+    // Append variable IEs from firmware.
+    let var_ie_len = ie_length.min(VAR_IE_CAP);
+    if var_ie_len > 0 && bss_data.len() >= VARIABLE_IES_OFFSET + var_ie_len {
+        combined_buf[combined_len..combined_len + var_ie_len]
+            .copy_from_slice(&bss_data[VARIABLE_IES_OFFSET..VARIABLE_IES_OFFSET + var_ie_len]);
+        combined_len += var_ie_len;
+    }
+
+    let ies_ptr = if combined_len > 0 {
+        combined_buf.as_ptr()
     } else {
         core::ptr::null()
     };
@@ -308,7 +349,7 @@ fn inform_bss(wiphy: *mut c_void, bss_data: &[u8]) {
             capability,
             beacon_interval,
             ies_ptr,
-            ie_length,
+            combined_len,
             gfp,
         )
     };

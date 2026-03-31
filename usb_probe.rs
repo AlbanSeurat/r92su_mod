@@ -7,10 +7,15 @@
 use core::ffi::c_void;
 use kernel::{bindings, device::Core, prelude::*, usb};
 
+use crate::cfg80211_misc;
+use crate::connect;
+use crate::keys;
 use crate::r92u::{r92su_usb_init, EndpointDirection, EndpointType, R92suDevice, UsbEndpoint};
 use crate::r92u_alloc::r92su_alloc;
 use crate::r92u_open;
 use crate::scan;
+use crate::sta;
+use crate::station_info;
 use crate::usb_register::r92su_register;
 use crate::usb_setup::r92su_setup;
 
@@ -130,8 +135,23 @@ pub fn r92su_usb_probe(
     // Register ndo_open callback so firmware is uploaded on interface up.
     r92u_open::ndo_open_init();
 
+    // Register ndo_start_xmit and ndo_stop callbacks.
+    r92u_open::ndo_xmit_stop_init();
+
     // Initialise scan subsystem and register callbacks.
     scan::init();
+
+    // Initialise connect/disconnect subsystem and register callbacks.
+    connect::init();
+
+    // Initialise key management and register add/del/set_default_key callbacks.
+    keys::init();
+
+    // Initialise station info operations for get_station/dump_station.
+    station_info::init();
+
+    // Initialise misc cfg80211 operations.
+    cfg80211_misc::init();
 
     Ok(dev)
 }
