@@ -44,6 +44,8 @@ extern "C" {
     fn rust_helper_set_ndo_stop(fn_ptr: Option<extern "C" fn(*mut c_void) -> i32>);
 
     fn rust_helper_kill_rx_urbs();
+
+    fn rust_helper_netif_tx_wake_all_queues(ndev: *mut core::ffi::c_void);
 }
 
 /// USB bulk-in completion callback — called from the C RX URB completion
@@ -69,7 +71,18 @@ extern "C" fn tx_complete_callback(dev_ptr: *mut c_void) {
     // SAFETY: dev_ptr was stored via rust_helper_set_tx_complete_fn in r92su_open
     // and is valid for the lifetime of the USB interface.
     let dev = unsafe { &mut *(dev_ptr as *mut R92suDevice) };
-    // TODO: implement TX completion handling (stats, wake TX queue, etc.)
+
+    dev.tx_pending_urbs
+        .fetch_sub(1, core::sync::atomic::Ordering::AcqRel);
+    pr_debug!(
+        "r92su: TX complete, pending={}\n",
+        dev.tx_pending_urbs
+            .load(core::sync::atomic::Ordering::Acquire)
+    );
+
+    if !dev.netdev_ptr.is_null() && dev.is_open() {
+        unsafe { rust_helper_netif_tx_wake_all_queues(dev.netdev_ptr) };
+    }
 }
 
 extern "C" fn ndo_open_callback(dev_ptr: *mut c_void) -> i32 {

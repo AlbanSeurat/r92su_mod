@@ -225,9 +225,12 @@ extern "C" fn del_key_callback(
         }
     };
 
-    if dev.state != State::Connected {
-        return -11; // -EAGAIN
-    }
+    pr_debug!(
+        "r92su: del_key idx={} pairwise={} state={:?}\n",
+        key_index,
+        pairwise,
+        dev.state
+    );
 
     let peer: [u8; 6] = if !mac_addr.is_null() {
         let mut a = [0u8; 6];
@@ -239,29 +242,63 @@ extern "C" fn del_key_callback(
     };
 
     if pairwise {
-        // Send an empty pairwise key to clear the firmware entry.
-        if let Err(e) = cmd::h2c_set_sta_key(dev, EncAlg::None, &peer, &[]) {
-            pr_err!("r92su: del_key: h2c_set_sta_key(None) failed: {:?}\n", e);
-            return -5; // -EIO
+        if dev.state != State::Connected {
+            return -11; // -EAGAIN
         }
-        // Clear stored key for this station.
+
+        // Check if we should skip the firmware notification.
+        // If the station has a key that was never uploaded, just return success.
+        let skip_fw_notify = dev
+            .sta_list
+            .iter()
+            .any(|sta| sta.mac_addr == peer && matches!(sta.sta_key, Some(ref k) if !k.uploaded));
+
+        if !skip_fw_notify {
+            if let Err(e) = cmd::h2c_set_sta_key(dev, EncAlg::None, &peer, &[]) {
+                pr_err!("r92su: del_key: h2c_set_sta_key(None) failed: {:?}\n", e);
+                return -5; // -EIO
+            }
+        }
+
+        // Now clear the key from the station entry.
         for sta in dev.sta_list.iter_mut() {
             if sta.mac_addr == peer {
                 sta.sta_key = None;
                 break;
             }
         }
+        pr_debug!("r92su: del_key pairwise idx={}\n", key_index);
     } else {
+        if dev.state != State::Connected {
+            pr_debug!(
+                "r92su: del_key group idx={} not connected, returning -EAGAIN\n",
+                key_index
+            );
+            return -11; // -EAGAIN
+        }
+
         let idx = key_index as usize;
         if idx >= dev.group_keys.len() {
-            return -22; // -EINVAL
+            pr_debug!(
+                "r92su: del_key group idx={} out of range (max {}), ignoring\n",
+                idx,
+                dev.group_keys.len() - 1
+            );
+            return 0;
         }
-        // Send empty group key to clear firmware entry.
-        if let Err(e) = cmd::h2c_set_key(dev, EncAlg::None, key_index, true, &[]) {
-            pr_err!("r92su: del_key: h2c_set_key(None) failed: {:?}\n", e);
-            return -5; // -EIO
+
+        let should_delete = dev.group_keys[idx]
+            .as_ref()
+            .map_or(false, |key| key.uploaded);
+
+        if should_delete {
+            if let Err(e) = cmd::h2c_set_key(dev, EncAlg::None, key_index, true, &[]) {
+                pr_err!("r92su: del_key: h2c_set_key(None) failed: {:?}\n", e);
+                return -5; // -EIO
+            }
         }
         dev.group_keys[idx] = None;
+        pr_debug!("r92su: del_key group idx={}\n", key_index);
     }
 
     pr_debug!("r92su: del_key idx={} pairwise={}\n", key_index, pairwise);

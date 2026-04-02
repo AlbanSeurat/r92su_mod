@@ -788,6 +788,8 @@ pub struct R92suDevice {
     pub tx_bytes: u64,
     /// Count of frames dropped in the TX path.
     pub tx_dropped: u64,
+    /// Number of TX URBs currently pending completion.
+    pub tx_pending_urbs: core::sync::atomic::AtomicU32,
 
     /// Firmware image — set during probe so that ndo_open can upload it.
     pub firmware: &'static [u8],
@@ -871,6 +873,7 @@ impl R92suDevice {
             tx_packets: 0,
             tx_bytes: 0,
             tx_dropped: 0,
+            tx_pending_urbs: core::sync::atomic::AtomicU32::new(0),
             firmware: &[],
             group_keys: [None, None, None, None],
             def_multi_key_idx: 0,
@@ -1147,10 +1150,14 @@ pub fn bulk_out_write(dev: &mut R92suDevice, data: &[u8]) -> Result<()> {
 
     // SAFETY: dev.udev is valid (set during probe, lives until disconnect);
     // data is a valid slice that will be copied into the URB buffer by the C code.
+    dev.tx_pending_urbs
+        .fetch_add(1, core::sync::atomic::Ordering::AcqRel);
     let ret =
         unsafe { rust_helper_submit_one_tx_urb(dev.udev, ep.address, data.as_ptr(), data.len()) };
 
     if ret < 0 {
+        dev.tx_pending_urbs
+            .fetch_sub(1, core::sync::atomic::Ordering::AcqRel);
         pr_err!(
             "bulk_out_write: rust_helper_submit_one_tx_urb failed (ep={:#04x} len={} ret={})\n",
             ep.address,

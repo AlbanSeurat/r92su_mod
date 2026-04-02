@@ -18,6 +18,13 @@ pub const NL80211_IFTYPE_ADHOC: u32 = 1;
 pub const NL80211_IFTYPE_STATION: u32 = 2;
 /// NL80211_IFTYPE_MONITOR
 pub const NL80211_IFTYPE_MONITOR: u32 = 6;
+/// NL80211_IFTYPE_P2P_CLIENT
+pub const NL80211_IFTYPE_P2P_CLIENT: u32 = 8;
+/// NL80211_IFTYPE_P2P_GO
+pub const NL80211_IFTYPE_P2P_GO: u32 = 7;
+
+/// NUM_NL80211_IFTYPES - number of interface types
+pub const NUM_NL80211_IFTYPES: usize = 9;
 
 // ---------------------------------------------------------------------------
 // WLAN cipher suite OUIs (from linux/ieee80211.h / WLAN_CIPHER_SUITE_*)
@@ -32,6 +39,48 @@ pub static CIPHER_SUITES: [u32; 4] = [
     0x000F_AC05, // WLAN_CIPHER_SUITE_WEP104
     0x000F_AC02, // WLAN_CIPHER_SUITE_TKIP
     0x000F_AC04, // WLAN_CIPHER_SUITE_CCMP
+];
+
+/// Management frame subtypes supported for rx (mirrors `ieee80211_txrx_stypes`).
+///
+/// Used to enable mgmt frame registration in cfg80211 (required for wpa_supplicant
+/// action frame support). Indexed by NL80211_IFTYPE_*.
+///
+/// Each entry is a struct with tx and rx bitmasks. The bitmasks use
+/// (IEEE80211_STYPE_XXX >> 4) as the bit index.
+#[repr(C)]
+pub struct Ieee80211TxrxStypes {
+    pub tx: u16,
+    pub rx: u16,
+}
+
+/// Default mgmt frame stypes - allows ACTION frames for station mode (needed for
+/// wpa_supplicant P2P/mesh operations) and probe requests.
+pub static DEFAULT_MGMT_STYPES: [Ieee80211TxrxStypes; NUM_NL80211_IFTYPES] = [
+    // IFTYPE_UNSPECIFIED (0)
+    Ieee80211TxrxStypes { tx: 0, rx: 0 },
+    // NL80211_IFTYPE_ADHOC (1)
+    Ieee80211TxrxStypes {
+        tx: 0xffff,
+        rx: 0x2000, // BIT(IEEE80211_STYPE_ACTION >> 4) = BIT(13)
+    },
+    // NL80211_IFTYPE_STATION (2) - needed for wpa_supplicant
+    Ieee80211TxrxStypes {
+        tx: 0xffff,
+        rx: 0x2000 | 0x0010, // ACTION (BIT(13)) + PROBE_REQ (BIT(4))
+    },
+    // IFTYPE_AP (3)
+    Ieee80211TxrxStypes { tx: 0, rx: 0 },
+    // IFTYPE_AP_VLAN (4)
+    Ieee80211TxrxStypes { tx: 0, rx: 0 },
+    // IFTYPE_WDS (5)
+    Ieee80211TxrxStypes { tx: 0, rx: 0 },
+    // NL80211_IFTYPE_MONITOR (6)
+    Ieee80211TxrxStypes { tx: 0, rx: 0 },
+    // NL80211_IFTYPE_P2P_GO (7)
+    Ieee80211TxrxStypes { tx: 0, rx: 0 },
+    // NL80211_IFTYPE_P2P_CLIENT (8)
+    Ieee80211TxrxStypes { tx: 0, rx: 0 },
 ];
 
 // ---------------------------------------------------------------------------
@@ -109,6 +158,12 @@ pub fn r92su_alloc(vendor_id: u16, product_id: u16, disable_ht: bool) -> Result<
     // SAFETY: `CIPHER_SUITES` is a `'static` array; its address remains
     // valid for the entire lifetime of the wiphy.
     unsafe { wiphy.set_cipher_suites(&CIPHER_SUITES) };
+
+    // wiphy->mgmt_stypes = r92su_default_mgmt_stypes;
+    //
+    // SAFETY: `DEFAULT_MGMT_STYPES` is a `'static` array; its address remains
+    // valid for the entire lifetime of the wiphy.
+    unsafe { wiphy.set_mgmt_stypes(DEFAULT_MGMT_STYPES.as_ptr() as *const core::ffi::c_void) };
 
     // set_wiphy_dev() is called later in usb_probe once the USB device
     // pointer is available (mirrors the C flow where main_dev is passed in

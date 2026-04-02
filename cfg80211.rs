@@ -55,6 +55,7 @@ extern "C" {
     fn rust_helper_wiphy_set_max_scan_ie_len(wiphy: *mut c_void, val: u16);
     fn rust_helper_wiphy_set_signal_type(wiphy: *mut c_void, t: c_int);
     fn rust_helper_wiphy_set_cipher_suites(wiphy: *mut c_void, suites: *const u32, n: c_int);
+    fn rust_helper_wiphy_set_mgmt_stypes(wiphy: *mut c_void, stypes: *const c_void);
 
     /// `rust_helper_sizeof_band_2ghz` — returns
     /// `sizeof(struct ieee80211_supported_band)`.
@@ -153,6 +154,59 @@ extern "C" {
         fn_ptr: Option<extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> c_int>,
     );
 
+    /// `rust_helper_set_cfg80211_ops_update_mgmt_frame_registrations` — set the .update_mgmt_frame_registrations callback.
+    fn rust_helper_set_cfg80211_ops_update_mgmt_frame_registrations(
+        fn_ptr: Option<extern "C" fn(*mut c_void, *mut c_void, *mut c_void)>,
+    );
+
+    /// `rust_helper_set_cfg80211_ops_mgmt_tx` — set the .mgmt_tx callback.
+    fn rust_helper_set_cfg80211_ops_mgmt_tx(
+        fn_ptr: Option<extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *mut u64) -> c_int>,
+    );
+
+    /// `rust_helper_cfg80211_mgmt_tx_status` — report mgmt frame tx status.
+    fn rust_helper_cfg80211_mgmt_tx_status(
+        wdev: *mut c_void,
+        cookie: u64,
+        buf: *const u8,
+        len: usize,
+        ack: bool,
+        gfp: c_int,
+    );
+
+    /// `rust_helper_set_cfg80211_ops_tdls_mgmt` — set the .tdls_mgmt callback.
+    fn rust_helper_set_cfg80211_ops_tdls_mgmt(
+        fn_ptr: Option<
+            extern "C" fn(
+                *mut c_void,
+                *mut c_void,
+                *const u8,
+                c_int,
+                u8,
+                u8,
+                u16,
+                u32,
+                bool,
+                *const u8,
+                usize,
+            ) -> c_int,
+        >,
+    );
+
+    /// `rust_helper_set_cfg80211_ops_tdls_oper` — set the .tdls_oper callback.
+    fn rust_helper_set_cfg80211_ops_tdls_oper(
+        fn_ptr: Option<extern "C" fn(*mut c_void, *mut c_void, *const u8, c_int) -> c_int>,
+    );
+
+    /// `rust_helper_cfg80211_tdls_oper_request` — request userspace to perform TDLS operation.
+    fn rust_helper_cfg80211_tdls_oper_request(
+        ndev: *mut c_void,
+        peer: *const u8,
+        oper: c_int,
+        reason_code: u16,
+        gfp: c_int,
+    );
+
     /// `rust_helper_debugfs_create` — create debugfs entries for the device.
     pub fn rust_helper_debugfs_create(dev: *mut c_void, wiphy: *mut c_void) -> *mut c_void;
 
@@ -175,6 +229,12 @@ extern "C" {
         get_rpwm: Option<extern "C" fn(*mut c_void) -> u8>,
         get_rx_queue_len: Option<extern "C" fn(*mut c_void) -> c_int>,
     );
+
+    /// `rust_helper_cfg80211_new_sta` — notify cfg80211 of a new station.
+    pub fn rust_helper_cfg80211_new_sta(ndev: *mut c_void, mac_addr: *const u8, aid: u8);
+
+    /// `rust_helper_cfg80211_del_sta` — notify cfg80211 that a station disassociated.
+    pub fn rust_helper_cfg80211_del_sta(ndev: *mut c_void, mac_addr: *const u8);
 }
 
 // ---------------------------------------------------------------------------
@@ -306,6 +366,15 @@ impl Wiphy {
         };
     }
 
+    /// Set `wiphy->mgmt_stypes`.
+    ///
+    /// # Safety
+    /// `stypes` must remain valid for the lifetime of the wiphy.
+    pub unsafe fn set_mgmt_stypes(&self, stypes: *const c_void) {
+        // SAFETY: caller guarantees `stypes` is valid for the lifetime of the wiphy.
+        unsafe { rust_helper_wiphy_set_mgmt_stypes(self.ptr.as_ptr(), stypes) };
+    }
+
     /// Initialise the 2.4 GHz band in the wiphy private area and assign
     /// `wiphy->bands[NL80211_BAND_2GHZ]`.
     ///
@@ -370,4 +439,24 @@ impl Drop for Wiphy {
 pub fn wiphy_priv(wiphy: *mut c_void) -> *mut c_void {
     // SAFETY: wiphy is valid, this just calls the C helper.
     unsafe { rust_helper_wiphy_priv(wiphy) }
+}
+
+/// Notify cfg80211 of a new station association.
+///
+/// Called from the C2H_ADD_STA_EVENT handler when the firmware reports
+/// that a peer station has associated with our BSS.
+pub fn cfg80211_new_sta(ndev: *mut c_void, mac_addr: &[u8; 6], aid: u8) {
+    // SAFETY: ndev is valid for the lifetime of the interface, mac_addr points
+    // to a 6-byte array that is valid for the duration of this call.
+    unsafe { rust_helper_cfg80211_new_sta(ndev, mac_addr.as_ptr(), aid) };
+}
+
+/// Notify cfg80211 that a station has disassociated.
+///
+/// Called from the C2H_DEL_STA_EVENT handler when the firmware reports
+/// that a peer station has left our BSS.
+pub fn cfg80211_del_sta(ndev: *mut c_void, mac_addr: &[u8; 6]) {
+    // SAFETY: ndev is valid for the lifetime of the interface, mac_addr points
+    // to a 6-byte array that is valid for the duration of this call.
+    unsafe { rust_helper_cfg80211_del_sta(ndev, mac_addr.as_ptr()) };
 }

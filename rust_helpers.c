@@ -111,6 +111,13 @@ void rust_helper_wiphy_set_cipher_suites(struct wiphy *wiphy,
 }
 EXPORT_SYMBOL_GPL(rust_helper_wiphy_set_cipher_suites);
 
+void rust_helper_wiphy_set_mgmt_stypes(struct wiphy *wiphy,
+				       const struct ieee80211_txrx_stypes *stypes)
+{
+	wiphy->mgmt_stypes = stypes;
+}
+EXPORT_SYMBOL_GPL(rust_helper_wiphy_set_mgmt_stypes);
+
 /* cfg80211_ops — function pointers set by Rust after init */
 struct cfg80211_ops r92su_cfg80211_ops = {
 	.scan                  = NULL,
@@ -127,6 +134,10 @@ struct cfg80211_ops r92su_cfg80211_ops = {
 	.leave_ibss           = NULL,
 	.set_wiphy_params     = NULL,
 	.set_monitor_channel  = NULL,
+	.mgmt_tx              = NULL,
+	.update_mgmt_frame_registrations = NULL,
+	.tdls_mgmt = NULL,
+	.tdls_oper = NULL,
 };
 
 /**
@@ -817,9 +828,28 @@ static void *r92su_tx_dev_ptr;
  */
 static void r92su_tx_complete(struct urb *urb)
 {
+	struct r92su_tx_ctx *ctx = urb->context;
+
 	if (r92su_tx_complete_fn)
 		r92su_tx_complete_fn(r92su_tx_dev_ptr);
+
+	usb_free_urb(urb);
+	kfree(ctx->buf);
+	ctx->urb = NULL;
+	ctx->buf = NULL;
 }
+
+/**
+ * rust_helper_netif_tx_wake_all_queues - wake all TX queues on a net_device.
+ *
+ * Called from the TX completion handler when pending URBs drop below the
+ * threshold, allowing the network stack to resume transmitting.
+ */
+void rust_helper_netif_tx_wake_all_queues(struct net_device *ndev)
+{
+	netif_tx_wake_all_queues(ndev);
+}
+EXPORT_SYMBOL_GPL(rust_helper_netif_tx_wake_all_queues);
 
 /**
  * rust_helper_set_tx_complete_fn - register the TX completion callback.
@@ -1185,6 +1215,34 @@ void rust_helper_cfg80211_disconnected(struct net_device *ndev, u16 reason)
 }
 EXPORT_SYMBOL_GPL(rust_helper_cfg80211_disconnected);
 
+/**
+ * rust_helper_cfg80211_new_sta - notify cfg80211 of a new station association.
+ *
+ * Called when firmware sends C2H_ADD_STA_EVENT after successful association.
+ * Informs the kernel about a new peer station so it can be tracked.
+ */
+void rust_helper_cfg80211_new_sta(struct net_device *ndev, const u8 *mac_addr,
+				  u8 aid)
+{
+	struct station_info sinfo = {};
+
+	sinfo.filled = 0;
+	cfg80211_new_sta(ndev, mac_addr, &sinfo, GFP_ATOMIC);
+}
+EXPORT_SYMBOL_GPL(rust_helper_cfg80211_new_sta);
+
+/**
+ * rust_helper_cfg80211_del_sta - notify cfg80211 that a station disassociated.
+ *
+ * Called when firmware sends C2H_DEL_STA_EVENT after a peer station leaves.
+ * Removes the station from the kernel's station table.
+ */
+void rust_helper_cfg80211_del_sta(struct net_device *ndev, const u8 *mac_addr)
+{
+	cfg80211_del_sta(ndev, mac_addr, GFP_ATOMIC);
+}
+EXPORT_SYMBOL_GPL(rust_helper_cfg80211_del_sta);
+
 /* ---------------------------------------------------------------------------
  * Deferred connect-result work
  *
@@ -1366,6 +1424,83 @@ void rust_helper_set_cfg80211_ops_set_monitor_channel(
 	r92su_cfg80211_ops.set_monitor_channel = fn;
 }
 EXPORT_SYMBOL_GPL(rust_helper_set_cfg80211_ops_set_monitor_channel);
+
+/**
+ * rust_helper_set_cfg80211_ops_update_mgmt_frame_registrations - set the .update_mgmt_frame_registrations callback.
+ *
+ * Note: The callback is stored as a void* function pointer to avoid strict
+ * type checking issues with struct mgmt_frame_regs. The actual callback
+ * receives the pointer cast from void*.
+ */
+void rust_helper_set_cfg80211_ops_update_mgmt_frame_registrations(
+	void (*fn)(struct wiphy *wiphy, struct wireless_dev *wdev,
+		   void *upd))
+{
+	r92su_cfg80211_ops.update_mgmt_frame_registrations = (void (*)(struct wiphy *, struct wireless_dev *, struct mgmt_frame_regs *))fn;
+}
+EXPORT_SYMBOL_GPL(rust_helper_set_cfg80211_ops_update_mgmt_frame_registrations);
+
+/**
+ * rust_helper_set_cfg80211_ops_mgmt_tx - set the .mgmt_tx callback.
+ */
+void rust_helper_set_cfg80211_ops_mgmt_tx(
+	int (*fn)(struct wiphy *wiphy, struct wireless_dev *wdev,
+		  struct cfg80211_mgmt_tx_params *params, u64 *cookie))
+{
+	r92su_cfg80211_ops.mgmt_tx = fn;
+}
+EXPORT_SYMBOL_GPL(rust_helper_set_cfg80211_ops_mgmt_tx);
+
+/**
+ * rust_helper_set_cfg80211_ops_tdls_mgmt - set the .tdls_mgmt callback.
+ */
+void rust_helper_set_cfg80211_ops_tdls_mgmt(
+	int (*fn)(struct wiphy *wiphy, struct net_device *ndev,
+		  const u8 *peer, int link_id,
+		  u8 action_code, u8 dialog_token,
+		  u16 status_code, u32 peer_capability,
+		  bool initiator, const u8 *buf, size_t len))
+{
+	r92su_cfg80211_ops.tdls_mgmt = fn;
+}
+EXPORT_SYMBOL_GPL(rust_helper_set_cfg80211_ops_tdls_mgmt);
+
+/**
+ * rust_helper_set_cfg80211_ops_tdls_oper - set the .tdls_oper callback.
+ */
+void rust_helper_set_cfg80211_ops_tdls_oper(
+	int (*fn)(struct wiphy *wiphy, struct net_device *ndev,
+		  const u8 *peer, int oper))
+{
+	r92su_cfg80211_ops.tdls_oper = (int (*)(struct wiphy *, struct net_device *,
+					       const u8 *, enum nl80211_tdls_operation))fn;
+}
+EXPORT_SYMBOL_GPL(rust_helper_set_cfg80211_ops_tdls_oper);
+
+/**
+ * rust_helper_cfg80211_mgmt_tx_status - report mgmt frame tx status.
+ *
+ * Called from Rust after tx attempt to inform cfg80211/wpa_supplicant
+ * of the result.
+ */
+void rust_helper_cfg80211_mgmt_tx_status(
+	struct wireless_dev *wdev, u64 cookie, const u8 *buf, size_t len,
+	bool ack, gfp_t gfp)
+{
+	cfg80211_mgmt_tx_status(wdev, cookie, buf, len, ack, gfp);
+}
+EXPORT_SYMBOL_GPL(rust_helper_cfg80211_mgmt_tx_status);
+
+/**
+ * rust_helper_cfg80211_tdls_oper_request - request userspace to perform TDLS operation.
+ */
+void rust_helper_cfg80211_tdls_oper_request(
+	struct net_device *ndev, const u8 *peer,
+	enum nl80211_tdls_operation oper, u16 reason_code, gfp_t gfp)
+{
+	cfg80211_tdls_oper_request(ndev, peer, oper, reason_code, gfp);
+}
+EXPORT_SYMBOL_GPL(rust_helper_cfg80211_tdls_oper_request);
 
 /**
  * rust_helper_cfg80211_sta_info - extract station_info fields for Rust.

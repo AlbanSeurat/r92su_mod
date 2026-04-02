@@ -10,12 +10,14 @@ use kernel::{bindings, device::Core, prelude::*, usb};
 use crate::cfg80211_misc;
 use crate::connect;
 use crate::keys;
+use crate::mgmt_frame;
 use crate::r92u::{r92su_usb_init, EndpointDirection, EndpointType, R92suDevice, UsbEndpoint};
 use crate::r92u_alloc::r92su_alloc;
 use crate::r92u_open;
 use crate::scan;
 use crate::sta;
 use crate::station_info;
+use crate::tdls;
 use crate::usb_register::r92su_register;
 use crate::usb_setup::r92su_setup;
 
@@ -152,6 +154,12 @@ pub fn r92su_usb_probe(
 
     // Initialise misc cfg80211 operations.
     cfg80211_misc::init();
+
+    // Initialise mgmt_frame_register callback.
+    mgmt_frame::init();
+
+    // Initialise TDLS callbacks.
+    tdls::init();
 
     Ok(dev)
 }

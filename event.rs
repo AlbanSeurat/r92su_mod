@@ -10,6 +10,7 @@
 
 use kernel::prelude::*;
 
+use crate::cfg80211;
 use crate::connect;
 use crate::r92u::{R92suDevice, State};
 use crate::scan;
@@ -290,10 +291,25 @@ fn c2h_add_sta_event(dev: &mut R92suDevice, payload: &[u8]) {
             return;
         }
     };
-    let aid = u32::from_le(ev.aid) as usize;
+    let aid = u32::from_le(ev.aid) as u8;
+    pr_debug!(
+        "r92su: C2H_ADD_STA mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} aid={}\n",
+        ev.mac_addr[0],
+        ev.mac_addr[1],
+        ev.mac_addr[2],
+        ev.mac_addr[3],
+        ev.mac_addr[4],
+        ev.mac_addr[5],
+        aid
+    );
     // mac_id == aid for peer stations in the firmware model.
-    if let Err(_) = dev.sta_alloc(&ev.mac_addr, aid, aid) {
+    if let Err(_) = dev.sta_alloc(&ev.mac_addr, aid as usize, aid as usize) {
         pr_err!("r92su: failed to alloc station {}\n", aid);
+        return;
+    }
+
+    if !dev.netdev_ptr.is_null() {
+        cfg80211::cfg80211_new_sta(dev.netdev_ptr, &ev.mac_addr, aid);
     }
 }
 
@@ -307,6 +323,16 @@ fn c2h_del_sta_event(dev: &mut R92suDevice, payload: &[u8]) {
         }
     };
 
+    pr_debug!(
+        "r92su: C2H_DEL_STA mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
+        ev.mac_addr[0],
+        ev.mac_addr[1],
+        ev.mac_addr[2],
+        ev.mac_addr[3],
+        ev.mac_addr[4],
+        ev.mac_addr[5]
+    );
+
     if dev.iftype == NL80211_IFTYPE_STATION {
         // In STA mode the "del sta" event means we've been disconnected.
         dev.connect_result = None;
@@ -318,6 +344,9 @@ fn c2h_del_sta_event(dev: &mut R92suDevice, payload: &[u8]) {
         if let Some(sta) = dev.sta_by_mac(&ev.mac_addr) {
             let mac_id = sta.mac_id;
             dev.sta_del(mac_id);
+            if !dev.netdev_ptr.is_null() {
+                cfg80211::cfg80211_del_sta(dev.netdev_ptr, &ev.mac_addr);
+            }
         }
     }
 }
