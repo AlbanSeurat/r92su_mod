@@ -751,6 +751,9 @@ pub struct R92suDevice {
     /// CPWM toggle bit — compared against the previous value to detect a stuck
     /// firmware (mirrors `r92su->cpwm_tog`).
     pub cpwm_tog: u8,
+    /// RPWM toggle bit — used when writing to REG_USB_HRPWM to prevent firmware
+    /// from ignoring repeated same-value writes (mirrors `r92su->rpwm_tog`).
+    pub rpwm_tog: u8,
 
     /// Raw BSS blobs accumulated during a site survey.
     ///
@@ -863,6 +866,7 @@ impl R92suDevice {
             c2h_seq: 0,
             cpwm: 0,
             cpwm_tog: 0,
+            rpwm_tog: 0,
             add_bss_pending: KVec::new(),
             connect_result: None,
             pending_rx: KVec::new(),
@@ -1490,7 +1494,7 @@ const REG_LDOA15_CTRL: u16 = 0x0020;
 const REG_LDOV12D_CTRL: u16 = 0x0021;
 const REG_AFE_XTAL_CTRL: u16 = 0x0026;
 const REG_SYS_ISO_CTRL: u16 = 0x0000;
-const REG_USB_HRPWM: u16 = 0x0fe8;
+pub const REG_USB_HRPWM: u16 = 0x0fe8;
 const REG_USB_MAGIC: u16 = 0x0fe7;
 const REG_PMC_FSM: u16 = 0x0004;
 
@@ -1538,6 +1542,15 @@ const BBRSTN: u16 = 0x2000;
 // Power states
 const PS_ACTIVE: u8 = 0x00;
 const PS_RADIO_OFF: u8 = 0x01;
+
+// Power states for RPWM (REG_USB_HRPWM)
+pub const PS_STATE_S2: u8 = 0x02;
+pub const PS_STATE_S4: u8 = 0x04;
+pub const PS_TOGGLE_BIT: u8 = 0x80;
+
+// Power modes for H2C_SETPOWERMODE_CMD
+pub const PS_MODE_ACTIVE: u8 = 0;
+pub const PS_MODE_RADIO_OFF: u8 = 9;
 
 // USB magic
 const USB_MAGIC_BIT7: u8 = 0x80;

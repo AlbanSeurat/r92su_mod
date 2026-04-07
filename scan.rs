@@ -38,12 +38,37 @@ extern "C" {
     fn rust_helper_ieee80211_channel_to_frequency(chan: c_int, band: c_int) -> c_int;
 
     fn rust_helper_wiphy_get_channel(wiphy: *mut c_void, ch_num: u8) -> *mut c_void;
+
+    fn rust_helper_schedule_scan_timeout(
+        delay_ms: u32,
+        fn_ptr: Option<extern "C" fn(*mut c_void)>,
+        dev_ptr: *mut c_void,
+    ) -> i32;
+
+    fn rust_helper_cancel_scan_timeout() -> i32;
 }
 
 const GFP_KERNEL_FAILBACK: i32 = 0x20;
 
+const SCAN_TIMEOUT_MS: u32 = 5000;
+
 // The current pending scan request, used to complete the scan.
 static mut PENDING_SCAN_REQUEST: *mut c_void = core::ptr::null_mut();
+
+// Callback invoked when scan timeout fires.
+extern "C" fn scan_timeout_callback(dev_ptr: *mut c_void) {
+    if dev_ptr.is_null() {
+        return;
+    }
+    // Cast from *mut c_void to *mut R92suDevice.
+    // SAFETY: dev_ptr was stored as R92suDevice* in schedule_scan_timeout.
+    let dev: &mut R92suDevice = unsafe { &mut *(dev_ptr as *mut R92suDevice) };
+    pr_debug!("r92su: scan timeout fired, forcing scan complete\n");
+
+    // Mark scan as done and complete it.
+    dev.scan_done = true;
+    complete_scan(dev);
+}
 
 extern "C" fn scan_callback(wiphy: *mut c_void, request: *mut c_void) -> c_int {
     pr_debug!(
@@ -95,6 +120,17 @@ extern "C" fn scan_callback(wiphy: *mut c_void, request: *mut c_void) -> c_int {
     match cmd::h2c_survey(dev, ssid) {
         Ok(()) => {
             pr_debug!("r92su: h2c_survey sent, waiting for SurveyDone event\n");
+            // Schedule 5-second timeout to forcibly complete scan if firmware is silent.
+            // Cast dev_ptr to *mut c_void as required by the C helper.
+            // SAFETY: scan_timeout_callback is a valid extern "C" fn; dev_ptr is valid.
+            let dev_ptr_void = dev_ptr as *mut c_void;
+            unsafe {
+                rust_helper_schedule_scan_timeout(
+                    SCAN_TIMEOUT_MS,
+                    Some(scan_timeout_callback),
+                    dev_ptr_void,
+                );
+            }
             0
         }
         Err(e) => {
@@ -137,6 +173,10 @@ extern "C" fn abort_scan_callback(wiphy: *mut c_void, _wdev: *mut c_void) {
 /// Called when firmware reports `SurveyDone` event.
 pub fn complete_scan(dev: &mut R92suDevice) {
     pr_debug!("r92su: complete_scan entered\n");
+
+    // Cancel any pending scan timeout - we're completing now.
+    // SAFETY: Safe to call even if no timeout was scheduled.
+    unsafe { rust_helper_cancel_scan_timeout() };
 
     // SAFETY: Checked for null below.
     let request = unsafe { PENDING_SCAN_REQUEST };
@@ -233,6 +273,14 @@ fn inform_bss(wiphy: *mut c_void, bss_data: &[u8]) {
 
     // SAFETY: We check bounds before accessing offsets.
     let bssid_ptr = unsafe { bss_data.as_ptr().add(bssid_offset) };
+    let bssid = [
+        bss_data[bssid_offset],
+        bss_data[bssid_offset + 1],
+        bss_data[bssid_offset + 2],
+        bss_data[bssid_offset + 3],
+        bss_data[bssid_offset + 4],
+        bss_data[bssid_offset + 5],
+    ];
     let rssi = u32::from_le_bytes([
         bss_data[rssi_offset],
         bss_data[rssi_offset + 1],
@@ -297,8 +345,8 @@ fn inform_bss(wiphy: *mut c_void, bss_data: &[u8]) {
     // Append variable IEs from firmware.
     let var_ie_len = ie_length.min(VAR_IE_CAP);
     if var_ie_len > 0 && bss_data.len() >= VARIABLE_IES_OFFSET + var_ie_len {
-        combined_buf[combined_len..combined_len + var_ie_len]
-            .copy_from_slice(&bss_data[VARIABLE_IES_OFFSET..VARIABLE_IES_OFFSET + var_ie_len]);
+        let var_ies = &bss_data[VARIABLE_IES_OFFSET..VARIABLE_IES_OFFSET + var_ie_len];
+        combined_buf[combined_len..combined_len + var_ie_len].copy_from_slice(var_ies);
         combined_len += var_ie_len;
     }
 
@@ -328,6 +376,20 @@ fn inform_bss(wiphy: *mut c_void, bss_data: &[u8]) {
     } else {
         1
     };
+
+    pr_info!(
+        "r92su: BSS BSSID={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} SSID_len={} RSSI={} ch={} cap=0x{:04x} beacon={}\n",
+        bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5],
+        fixed_ssid_len, rssi, ch_num, capability, beacon_interval
+    );
+    if fixed_ssid_len > 0 {
+        let ssid_str =
+            core::str::from_utf8(&bss_data[ssid_bytes_offset..ssid_bytes_offset + fixed_ssid_len]);
+        match ssid_str {
+            Ok(s) => pr_info!("r92su:   SSID: {}\n", s),
+            Err(_) => pr_info!("r92su:   SSID: (non-UTF8, {} bytes)\n", fixed_ssid_len),
+        }
+    }
 
     // Get the channel from wiphy bands.
     let channel = find_channel(wiphy, ch_num);

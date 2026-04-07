@@ -5,6 +5,7 @@ use core::ffi::c_void;
 use kernel::prelude::*;
 
 use crate::cmd;
+use crate::cmd::r92su_set_power;
 use crate::fw;
 use crate::r92u::{hw_early_mac_setup, hw_late_mac_setup, init_mac, R92suDevice, Result, State}; //
 use crate::rx; //
@@ -46,6 +47,10 @@ extern "C" {
     fn rust_helper_kill_rx_urbs();
 
     fn rust_helper_netif_tx_wake_all_queues(ndev: *mut core::ffi::c_void);
+
+    fn rust_helper_netif_carrier_off(ndev: *mut core::ffi::c_void);
+
+    fn rust_helper_netif_tx_stop_all_queues(ndev: *mut core::ffi::c_void);
 }
 
 /// USB bulk-in completion callback — called from the C RX URB completion
@@ -235,6 +240,12 @@ extern "C" fn ndo_stop_callback(dev_ptr: *mut c_void) -> i32 {
 
     if dev.state == State::Connected {
         let _ = cmd::h2c_disconnect(dev);
+    }
+
+    // Turn off the radio and put firmware into power-down state.
+    // SAFETY: r92su_set_power writes to hardware via USB control transfer.
+    if let Err(e) = r92su_set_power(dev, false) {
+        pr_warn!("r92su: failed to set power off: {:?}\n", e);
     }
 
     // Kill all active RX URBs so the bulk-in pipe is drained.

@@ -21,7 +21,10 @@
 
 use kernel::prelude::*; //
 
-use crate::r92u::{usb_tx_cmd, R92suDevice, Result}; //
+use crate::r92u::{
+    hw_write8, usb_tx_cmd, R92suDevice, Result, PS_MODE_ACTIVE, PS_MODE_RADIO_OFF, PS_STATE_S2,
+    PS_STATE_S4, PS_TOGGLE_BIT, REG_USB_HRPWM,
+}; // //
 
 // ---------------------------------------------------------------------------
 // Frame-layout constants (mirrors def.h / cmd.c)
@@ -741,4 +744,25 @@ pub fn h2c_set_power_mode(dev: &mut R92suDevice, ps_mode: u8, smart_ps: u8) -> R
     };
     // SAFETY: H2cSetPowerMode is #[repr(C, packed)] with no pointer fields.
     h2c_copy(dev, FwH2cCmd::SetPwrMode, unsafe { as_bytes(&args) })
+}
+
+/// Set device power state.
+///
+/// Mirrors `r92su_set_power()` from `pwr.c`:
+/// - If `on = true`: write PS_STATE_S4 to REG_USB_HRPWM, send H2C_SET_POWER_MODE(ACTIVE)
+/// - If `on = false`: write PS_STATE_S2 to REG_USB_HRPWM, send H2C_SET_POWER_MODE(RADIO_OFF)
+///
+/// The RPWM toggle bit prevents firmware from ignoring repeated same-value writes.
+pub fn r92su_set_power(dev: &mut R92suDevice, on: bool) -> Result<()> {
+    if on {
+        dev.rpwm_tog ^= PS_TOGGLE_BIT;
+        let rpwm = PS_STATE_S4 | dev.rpwm_tog;
+        unsafe { hw_write8(dev.udev, REG_USB_HRPWM, rpwm) };
+        h2c_set_power_mode(dev, PS_MODE_ACTIVE, 0)
+    } else {
+        dev.rpwm_tog ^= PS_TOGGLE_BIT;
+        let rpwm = PS_STATE_S2 | dev.rpwm_tog;
+        unsafe { hw_write8(dev.udev, REG_USB_HRPWM, rpwm) };
+        h2c_set_power_mode(dev, PS_MODE_RADIO_OFF, 1)
+    }
 }

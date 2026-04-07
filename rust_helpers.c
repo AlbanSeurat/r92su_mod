@@ -852,6 +852,28 @@ void rust_helper_netif_tx_wake_all_queues(struct net_device *ndev)
 EXPORT_SYMBOL_GPL(rust_helper_netif_tx_wake_all_queues);
 
 /**
+ * rust_helper_netif_carrier_off - set carrier off on a net_device.
+ *
+ * Called when the station is evicted or disconnected to stop transmission.
+ */
+void rust_helper_netif_carrier_off(struct net_device *ndev)
+{
+	netif_carrier_off(ndev);
+}
+EXPORT_SYMBOL_GPL(rust_helper_netif_carrier_off);
+
+/**
+ * rust_helper_netif_tx_stop_all_queues - stop all TX queues on a net_device.
+ *
+ * Called when the station is evicted or disconnected to prevent new transmissions.
+ */
+void rust_helper_netif_tx_stop_all_queues(struct net_device *ndev)
+{
+	netif_tx_stop_all_queues(ndev);
+}
+EXPORT_SYMBOL_GPL(rust_helper_netif_tx_stop_all_queues);
+
+/**
  * rust_helper_set_tx_complete_fn - register the TX completion callback.
  *
  * @fn_ptr:  called from TX URB completion with (dev_ptr)
@@ -2026,6 +2048,50 @@ static ssize_t r92su_debugfs_rx_queue_len_read(struct file *file,
 		len = snprintf(buf, sizeof(buf), "0\n");
 	return simple_read_from_buffer(userbuf, count, ppos, buf, len);
 }
+
+/**
+ * rust_helper_schedule_scan_timeout - schedule a scan timeout callback.
+ *
+ * @delay_ms: timeout in milliseconds
+ * @fn_ptr: callback function to invoke on timeout
+ * @dev_ptr: opaque device pointer
+ *
+ * Returns 0 on success, negative error on failure.
+ */
+static void (*scan_timeout_fn)(void *dev_ptr);
+static void *scan_timeout_dev_ptr;
+static struct delayed_work scan_timeout_work;
+
+static void scan_timeout_worker(struct work_struct *work)
+{
+	if (scan_timeout_fn && scan_timeout_dev_ptr)
+		scan_timeout_fn(scan_timeout_dev_ptr);
+}
+
+int rust_helper_schedule_scan_timeout(unsigned long delay_ms,
+				       void (*fn_ptr)(void *dev_ptr),
+				       void *dev_ptr)
+{
+	scan_timeout_fn = fn_ptr;
+	scan_timeout_dev_ptr = dev_ptr;
+
+	INIT_DELAYED_WORK(&scan_timeout_work, scan_timeout_worker);
+	queue_delayed_work(system_unbound_wq, &scan_timeout_work,
+			   msecs_to_jiffies(delay_ms));
+	return 0;
+}
+EXPORT_SYMBOL_GPL(rust_helper_schedule_scan_timeout);
+
+/**
+ * rust_helper_cancel_scan_timeout - cancel any pending scan timeout.
+ *
+ * Returns 0 if cancelled, 1 if already executed.
+ */
+int rust_helper_cancel_scan_timeout(void)
+{
+	return cancel_delayed_work(&scan_timeout_work);
+}
+EXPORT_SYMBOL_GPL(rust_helper_cancel_scan_timeout);
 
 /* File operations for debugfs read files */
 #define R92SU_DEBUGFS_RO_FILE(name) \

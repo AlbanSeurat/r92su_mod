@@ -71,6 +71,71 @@ extern "C" {
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
+/// IEEE 802.11 element IDs
+const WLAN_EID_HT_CAPABILITY: u8 = 45;
+const WLAN_EID_VENDOR_SPECIFIC: u8 = 221;
+
+/// WMM OUI (Microsoft)
+const WMM_OUI: [u8; 3] = [0x00, 0x50, 0xf2];
+
+/// Build HT capability IE for RTL8192SU.
+///
+/// Mirrors `r92su_ht_update()` from main.c.
+/// Uses reasonable defaults for RTL8192SU (single stream, short GI, etc.)
+fn build_ht_ie(_dev: &R92suDevice) -> Option<[u8; 26]> {
+    // HT Capability IE:
+    // Element ID (1) + Length (1) + HT Capability Info (2) + A-MPDU Params (1) + MCS Set (16)
+    let mut ie = [0u8; 26];
+    ie[0] = WLAN_EID_HT_CAPABILITY;
+    ie[1] = 24; // Length
+
+    // HT Capability Info (little-endian):
+    // - LDPC coding capability
+    // - Channel width 40 MHz supported
+    // - GF (Greenfield) not supported
+    // - Short GI for 20MHz and 40MHz
+    // - Max AMSDU size 7935 bytes
+    // - DSSS/CCK 40MHz support
+    let cap_info: u16 = 0x018f; // HT-capable, 40MHz, short GI, max AMSDU
+    ie[2] = (cap_info & 0xff) as u8;
+    ie[3] = ((cap_info >> 8) & 0xff) as u8;
+
+    // A-MPDU Parameters:
+    // max A-MPDU length exponent = 1 (8K)
+    // minimum A-MPDU start spacing = 0
+    ie[4] = 0x01;
+
+    // Supported MCS Set (16 bytes):
+    // Rx MCS mask: 0xff (MCS 0-7, single stream)
+    // Tx not defined, all 0
+    ie[5] = 0xff; // MCS[0-7]
+    ie[6] = 0x00; // MCS[8-15]
+
+    // Rest of MCS set (bytes 7-15) and extended cap + beamforming = 0
+
+    // RX HT Capabilities (4 bytes) - zero
+    ie[22] = 0;
+    ie[23] = 0;
+    ie[24] = 0;
+    ie[25] = 0;
+
+    Some(ie)
+}
+
+/// Build WMM IE for QoS.
+///
+/// Mirrors `r92su_wmm_update()` from main.c.
+fn build_wmm_ie() -> [u8; 8] {
+    [
+        0x00, 0x50, 0xf2, // Microsoft OUI
+        0x02, // Information Element
+        0x00, // Length (4 bytes after this)
+        0x01, // WME Version
+        0x00, // WME QoS Info
+        0x00, // reserved
+    ]
+}
+
 /// Find the first BSS in `add_bss_pending` whose BSSID matches `target_bssid`.
 ///
 /// Returns the index into `add_bss_pending`, or `None` if no match.
@@ -194,6 +259,40 @@ extern "C" fn connect_callback(wiphy: *mut c_void, _ndev: *mut c_void, sme: *mut
             .extend_from_slice(&ie_buf[..ie_len], GFP_ATOMIC);
     }
 
+    // ── Build IEs with HT and WMM injection ───────────────────────────────────
+    // Inject HT and WMM IEs into the association request.
+    // Mirrors r92su_ht_update() and r92su_wmm_update() from main.c.
+    let mut combined_ie = [0u8; 512];
+    let mut combined_len = 0usize;
+
+    // Copy existing IEs from cfg80211
+    if ie_len > 0 {
+        let copy_len = (ie_len).min(512);
+        combined_ie[..copy_len].copy_from_slice(&ie_buf[..copy_len]);
+        combined_len = copy_len;
+    }
+
+    // Inject WMM IE first (vendor-specific, 8 bytes)
+    let wmm_ie = build_wmm_ie();
+    if combined_len + wmm_ie.len() < 512 {
+        combined_ie[combined_len..combined_len + wmm_ie.len()].copy_from_slice(&wmm_ie);
+        combined_len += wmm_ie.len();
+    }
+
+    // Inject HT Capability IE (26 bytes)
+    if let Some(ht_ie) = build_ht_ie(dev) {
+        if combined_len + ht_ie.len() < 512 {
+            combined_ie[combined_len..combined_len + ht_ie.len()].copy_from_slice(&ht_ie);
+            combined_len += ht_ie.len();
+        }
+    }
+
+    let ie_opt: Option<&[u8]> = if combined_len > 0 {
+        Some(&combined_ie[..combined_len])
+    } else {
+        None
+    };
+
     // ── Send H2C_JOINBSS_CMD ──────────────────────────────────────────────────
     // Reinterpret the raw BSS bytes as H2cc2hBss.
     //
@@ -211,12 +310,6 @@ extern "C" fn connect_callback(wiphy: *mut c_void, _ndev: *mut c_void, sme: *mut
     }
     let mut bss: H2cc2hBss =
         unsafe { core::ptr::read_unaligned(bss_bytes.as_ptr() as *const H2cc2hBss) };
-
-    let ie_opt: Option<&[u8]> = if ie_len > 0 {
-        Some(&ie_buf[..ie_len])
-    } else {
-        None
-    };
 
     match cmd::h2c_connect(dev, &mut bss, true, ie_opt) {
         Ok(()) => {

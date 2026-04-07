@@ -16,6 +16,11 @@ use crate::r92u::{R92suDevice, State};
 use crate::scan;
 use crate::sta; //
 
+extern "C" {
+    fn rust_helper_netif_carrier_off(ndev: *mut core::ffi::c_void);
+    fn rust_helper_netif_tx_stop_all_queues(ndev: *mut core::ffi::c_void);
+}
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 /// Size of the C2H header (struct h2cc2h in def.h).
@@ -335,9 +340,17 @@ fn c2h_del_sta_event(dev: &mut R92suDevice, payload: &[u8]) {
 
     if dev.iftype == NL80211_IFTYPE_STATION {
         // In STA mode the "del sta" event means we've been disconnected.
+        // Stop TX queues and drop carrier to prevent further transmissions.
+        if !dev.netdev_ptr.is_null() {
+            unsafe {
+                rust_helper_netif_tx_stop_all_queues(dev.netdev_ptr);
+                rust_helper_netif_carrier_off(dev.netdev_ptr);
+            }
+        }
         dev.connect_result = None;
         dev.connect_req_ie.clear();
         dev.scan_done = false;
+        dev.set_state(State::Open);
         pr_debug!("r92su: disconnected from BSS\n");
     } else {
         // AP/IBSS mode: remove the station from the table.
