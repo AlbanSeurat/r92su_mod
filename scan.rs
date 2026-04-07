@@ -52,6 +52,231 @@ const GFP_KERNEL_FAILBACK: i32 = 0x20;
 
 const SCAN_TIMEOUT_MS: u32 = 5000;
 
+const IE_RSN: u8 = 0x30;
+const IE_WPA: u8 = 0xDD;
+
+const WPA_OUI: [u8; 4] = [0x00, 0x50, 0xF2, 0x01];
+const RSN_VERSION: u16 = 1;
+
+const RSN_CIPHER_CCMP: u8 = 4;
+const RSN_CIPHER_TKIP: u8 = 2;
+const RSN_CIPHER_WEP40: u8 = 1;
+const RSN_CIPHER_WEP104: u8 = 5;
+const RSN_CIPHER_NONE: u8 = 0;
+
+const RSN_AKM_SAE: u8 = 8;
+const RSN_AKM_PSK: u8 = 2;
+const RSN_AKM_EAP: u8 = 1;
+
+struct SecurityInfo {
+    has_wpa3: bool,
+    has_wpa2: bool,
+    has_wpa: bool,
+    ciphers: [bool; 6],
+}
+
+impl SecurityInfo {
+    fn parse(ies: &[u8], capability: u16) -> Self {
+        let privacy = (capability & 0x0010) != 0;
+        let mut info = Self {
+            has_wpa3: false,
+            has_wpa2: false,
+            has_wpa: false,
+            ciphers: [false; 6],
+        };
+
+        let mut pos = 0;
+        while let Some((id, ie_data)) = Self::next_ie(ies, &mut pos) {
+            match id {
+                IE_RSN => Self::parse_rsn(ie_data, &mut info),
+                IE_WPA => Self::parse_wpa(ie_data, &mut info),
+                _ => {}
+            }
+        }
+
+        if !info.has_wpa2 && !info.has_wpa && privacy {
+            info.ciphers[RSN_CIPHER_WEP40 as usize] = true;
+        }
+
+        info
+    }
+
+    fn encryption(&self) -> &'static str {
+        if self.has_wpa3 {
+            "WPA3"
+        } else if self.has_wpa2 {
+            "WPA2"
+        } else if self.has_wpa {
+            "WPA"
+        } else if self.ciphers[RSN_CIPHER_WEP40 as usize]
+            || self.ciphers[RSN_CIPHER_WEP104 as usize]
+        {
+            "WEP"
+        } else {
+            "Open"
+        }
+    }
+
+    fn ciphers(&self) -> impl core::fmt::Display {
+        struct Ciphers {
+            has_ccmp: bool,
+            has_tkip: bool,
+            has_wep: bool,
+        }
+        impl core::fmt::Display for Ciphers {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                let mut first = true;
+                if self.has_ccmp {
+                    write!(f, "CCMP")?;
+                    first = false;
+                }
+                if self.has_tkip {
+                    if !first {
+                        write!(f, "/")?;
+                    }
+                    write!(f, "TKIP")?;
+                    first = false;
+                }
+                if self.has_wep {
+                    if !first {
+                        write!(f, "/")?;
+                    }
+                    write!(f, "WEP")?;
+                }
+                Ok(())
+            }
+        }
+        Ciphers {
+            has_ccmp: self.ciphers[RSN_CIPHER_CCMP as usize],
+            has_tkip: self.ciphers[RSN_CIPHER_TKIP as usize],
+            has_wep: self.ciphers[RSN_CIPHER_WEP40 as usize]
+                || self.ciphers[RSN_CIPHER_WEP104 as usize],
+        }
+    }
+
+    fn next_ie<'a>(ies: &'a [u8], pos: &mut usize) -> Option<(u8, &'a [u8])> {
+        if *pos + 2 > ies.len() {
+            return None;
+        }
+        let id = ies[*pos];
+        let len = ies[*pos + 1] as usize;
+        if *pos + 2 + len > ies.len() {
+            return None;
+        }
+        let data = &ies[*pos + 2..*pos + 2 + len];
+        *pos += 2 + len;
+        Some((id, data))
+    }
+
+    fn parse_rsn(data: &[u8], info: &mut Self) {
+        // RSN IE layout (after tag+len): version[2] | group_cipher[4] | pairwise_count[2] | ...
+        if data.len() < 6 || u16::from_le_bytes([data[0], data[1]]) != RSN_VERSION {
+            return;
+        }
+        info.has_wpa2 = true;
+        // Group cipher type is at byte 5 (after 2-byte version + 3-byte OUI).
+        Self::set_cipher(info, data[5]);
+        // Pairwise suites start at offset 8 (version[2] + group[4] + count[2]).
+        if let Some(pairwise) = data.get(8..) {
+            Self::parse_suites(pairwise, info, 4);
+        }
+        // AKM suites follow the pairwise block; pairwise count is at data[6..8].
+        let akm_offset = 8 + Self::suite_count(&data[6..]) * 4;
+        if let Some(akm_data) = data.get(akm_offset..) {
+            Self::parse_akm_suites(akm_data, info);
+        }
+    }
+
+    fn parse_wpa(data: &[u8], info: &mut Self) {
+        // WPA vendor IE layout: OUI+type[4] | version[2] | group_cipher[4] | pairwise_count[2] | ...
+        if data.len() < 10 || &data[..4] != &WPA_OUI {
+            return;
+        }
+        // Version is at bytes 4-5 (after the 4-byte OUI+type).
+        let version = u16::from_le_bytes([data[4], data[5]]);
+        if version != RSN_VERSION {
+            return;
+        }
+        info.has_wpa = true;
+        // Group cipher type is at byte 9 (OUI[4]+version[2]+group_OUI[3]+type[1]).
+        Self::set_cipher(info, data[9]);
+        // Pairwise suites start at offset 10 (OUI[4]+version[2]+group[4]).
+        if let Some(pairwise) = data.get(10..) {
+            Self::parse_suites(pairwise, info, 4);
+        }
+    }
+
+    fn parse_suites(data: &[u8], info: &mut Self, _suite_size: usize) {
+        if data.len() < 2 {
+            return;
+        }
+        for chunk in data[2..].chunks(4) {
+            if let Some(&cipher) = chunk.get(3) {
+                Self::set_cipher(info, cipher);
+            }
+        }
+    }
+
+    fn parse_akm_suites(data: &[u8], info: &mut Self) {
+        if data.len() < 2 {
+            return;
+        }
+        let count = u16::from_le_bytes([data[0], data[1]]) as usize;
+        for chunk in data[2..].chunks(4).take(count) {
+            if let Some(&akm) = chunk.get(3) {
+                if akm == RSN_AKM_SAE {
+                    info.has_wpa3 = true;
+                }
+            }
+        }
+    }
+
+    fn suite_count(data: &[u8]) -> usize {
+        if data.len() < 2 {
+            return 0;
+        }
+        u16::from_le_bytes([data[0], data[1]]) as usize
+    }
+
+    fn set_cipher(info: &mut Self, cipher: u8) {
+        if (cipher as usize) < info.ciphers.len() {
+            info.ciphers[cipher as usize] = true;
+        }
+    }
+}
+
+impl kernel::fmt::Display for SecurityInfo {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", self.encryption())?;
+        let has_ccmp = self.ciphers[RSN_CIPHER_CCMP as usize];
+        let has_tkip = self.ciphers[RSN_CIPHER_TKIP as usize];
+        let has_wep =
+            self.ciphers[RSN_CIPHER_WEP40 as usize] || self.ciphers[RSN_CIPHER_WEP104 as usize];
+        if has_ccmp || has_tkip || has_wep {
+            write!(f, "-")?;
+            let mut first = true;
+            if has_ccmp {
+                write!(f, "CCMP")?;
+                first = false;
+            }
+            if has_tkip {
+                if !first {
+                    write!(f, "/")?;
+                }
+                write!(f, "TKIP")?;
+                first = false;
+            }
+            if has_wep {
+                if !first {
+                    write!(f, "/")?;
+                }
+                write!(f, "WEP")?;
+            }
+        }
+        Ok(())
+    }
+}
+
 // The current pending scan request, used to complete the scan.
 static mut PENDING_SCAN_REQUEST: *mut c_void = core::ptr::null_mut();
 
@@ -267,7 +492,6 @@ fn inform_bss(wiphy: *mut c_void, bss_data: &[u8]) {
     let ssid_len_offset = 12;
     let ssid_bytes_offset = 16;
     let rssi_offset = 52;
-    let ie_length_offset = 112;
     // config.frequency is at offset 72 (after length/beacon_period/atim_window at 60/64/68).
     let freq_offset = 72;
 
@@ -288,19 +512,11 @@ fn inform_bss(wiphy: *mut c_void, bss_data: &[u8]) {
         bss_data[rssi_offset + 3],
     ]);
 
-    // Get ie_length (includes H2cFixedIes = 12 bytes, so subtract to get variable IE len)
-    const FIXED_IES_SIZE: usize = 12;
-    let ie_length = if bss_data.len() > ie_length_offset {
-        let raw_ie_len = u32::from_le_bytes([
-            bss_data[ie_length_offset],
-            bss_data[ie_length_offset + 1],
-            bss_data[ie_length_offset + 2],
-            bss_data[ie_length_offset + 3],
-        ]) as usize;
-        raw_ie_len.saturating_sub(FIXED_IES_SIZE)
-    } else {
-        0
-    };
+    // The variable IEs start at VARIABLE_IES_OFFSET (128). Derive the variable IE
+    // length from the actual stored data length rather than the ie_length field:
+    // the firmware's ie_length still includes the trailing FCS bytes, but
+    // c2h_survey_event already stripped those from the end of bss_data.
+    let ie_length = bss_data.len().saturating_sub(VARIABLE_IES_OFFSET);
 
     // Capability is at offset 126 (H2cFixedIes.caps).
     let capability = u16::from_le_bytes([bss_data[126], bss_data[127]]);
@@ -344,11 +560,16 @@ fn inform_bss(wiphy: *mut c_void, bss_data: &[u8]) {
 
     // Append variable IEs from firmware.
     let var_ie_len = ie_length.min(VAR_IE_CAP);
-    if var_ie_len > 0 && bss_data.len() >= VARIABLE_IES_OFFSET + var_ie_len {
-        let var_ies = &bss_data[VARIABLE_IES_OFFSET..VARIABLE_IES_OFFSET + var_ie_len];
-        combined_buf[combined_len..combined_len + var_ie_len].copy_from_slice(var_ies);
+    let var_ies = if var_ie_len > 0 && bss_data.len() >= VARIABLE_IES_OFFSET + var_ie_len {
+        let ies = &bss_data[VARIABLE_IES_OFFSET..VARIABLE_IES_OFFSET + var_ie_len];
+        combined_buf[combined_len..combined_len + var_ie_len].copy_from_slice(ies);
         combined_len += var_ie_len;
-    }
+        ies
+    } else {
+        &[][..]
+    };
+
+    let security = SecurityInfo::parse(var_ies, capability);
 
     let ies_ptr = if combined_len > 0 {
         combined_buf.as_ptr()
@@ -378,9 +599,9 @@ fn inform_bss(wiphy: *mut c_void, bss_data: &[u8]) {
     };
 
     pr_info!(
-        "r92su: BSS BSSID={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} SSID_len={} RSSI={} ch={} cap=0x{:04x} beacon={}\n",
+        "r92su: BSS BSSID={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} SSID_len={} RSSI={} ch={} sec={} cap=0x{:04x} beacon={}\n",
         bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5],
-        fixed_ssid_len, rssi, ch_num, capability, beacon_interval
+        fixed_ssid_len, rssi, ch_num, security, capability, beacon_interval
     );
     if fixed_ssid_len > 0 {
         let ssid_str =
