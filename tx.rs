@@ -596,6 +596,14 @@ pub fn r92su_tx(dev: &mut R92suDevice, frame: &[u8], mac_id: usize) -> Result<()
         pkt_size,
         effective_mac_id
     );
+
+    // Log packet being sent into the network.
+    let log_len = core::cmp::min(64, frame_buf.len());
+    pr_debug!(
+        "r92su tx: sending {} bytes: {:02x?}\n",
+        log_len,
+        &frame_buf[..log_len]
+    );
     Ok(())
 }
 

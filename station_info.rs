@@ -26,6 +26,10 @@ extern "C" {
         >,
     );
 
+    fn rust_helper_set_cfg80211_ops_change_station(
+        fn_ptr: Option<extern "C" fn(*mut c_void, *mut c_void, *const u8, *mut c_void) -> c_int>,
+    );
+
     fn rust_helper_station_info_set(
         sinfo: *mut c_void,
         rx_packets: u64,
@@ -173,12 +177,70 @@ extern "C" fn dump_station_callback(
     0
 }
 
+// ── cfg80211 .change_station ──────────────────────────────────────────────────
+
+const NL80211_STA_FLAG_AUTHORIZED: u32 = 5;
+
+extern "C" fn change_station_callback(
+    wiphy: *mut c_void,
+    _ndev: *mut c_void,
+    mac: *const u8,
+    params: *mut c_void,
+) -> c_int {
+    if mac.is_null() || params.is_null() {
+        return -22; // -EINVAL
+    }
+
+    let dev = match dev_from_wiphy(wiphy) {
+        Some(d) => d,
+        None => return -19, // -ENODEV
+    };
+
+    let mut peer = [0u8; ETH_ALEN];
+    unsafe { ptr::copy_nonoverlapping(mac, peer.as_mut_ptr(), ETH_ALEN) };
+
+    // Read sta_flags_mask and sta_flags_set from station_parameters.
+    // struct station_parameters {
+    //     u32 sta_flags_mask, sta_flags_set;
+    //     ...
+    // }
+    let sta_flags_mask: u32 = unsafe {
+        let ptr = params as *const u32;
+        ptr.read()
+    };
+    let sta_flags_set: u32 = unsafe {
+        let ptr = params.add(1) as *const u32;
+        ptr.read()
+    };
+
+    // Check if AUTHORIZED flag is being set (bit 5 = 1<<5 = 0x20)
+    let authorize_bit = 1u32 << NL80211_STA_FLAG_AUTHORIZED;
+    if (sta_flags_mask & authorize_bit) != 0 && (sta_flags_set & authorize_bit) != 0 {
+        // wpa_supplicant is marking the station as authorized (4-way handshake complete).
+        // For RTL8192SU in STA mode, we just acknowledge this.
+        pr_debug!(
+            "r92su: change_station: station {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} authorized\n",
+            peer[0],
+            peer[1],
+            peer[2],
+            peer[3],
+            peer[4],
+            peer[5]
+        );
+        return 0;
+    }
+
+    // For any other station parameter changes, just return success.
+    0
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 pub fn init() {
     unsafe {
         rust_helper_set_cfg80211_ops_get_station(Some(get_station_callback));
         rust_helper_set_cfg80211_ops_dump_station(Some(dump_station_callback));
+        rust_helper_set_cfg80211_ops_change_station(Some(change_station_callback));
     }
     pr_debug!("r92su: station info operations initialized\n");
 }

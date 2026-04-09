@@ -129,6 +129,11 @@ extern "C" {
         >,
     );
 
+    /// `rust_helper_set_cfg80211_ops_change_station` — set the .change_station callback.
+    fn rust_helper_set_cfg80211_ops_change_station(
+        fn_ptr: Option<extern "C" fn(*mut c_void, *mut c_void, *const u8, *mut c_void) -> c_int>,
+    );
+
     /// `rust_helper_set_cfg80211_ops_change_virtual_intf` — set the .change_virtual_intf callback.
     fn rust_helper_set_cfg80211_ops_change_virtual_intf(
         fn_ptr: Option<extern "C" fn(*mut c_void, *mut c_void, c_int, *mut c_void) -> c_int>,

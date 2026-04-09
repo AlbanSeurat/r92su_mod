@@ -27,10 +27,16 @@
 //! r92su_release_firmware(...); r92su_rx_deinit(...);
 //! ```
 
+use core::ffi::c_void;
+
 use kernel::prelude::*;
 
 use crate::debugfs;
 use crate::r92u::{R92suDevice, R92suError, Result, State}; //
+
+extern "C" {
+    fn rust_helper_get_netdev_ptr(wiphy: *mut c_void) -> *mut c_void;
+}
 
 // ---------------------------------------------------------------------------
 // register_wiphy — mirrors wiphy_register(r92su->wdev.wiphy)
@@ -169,6 +175,19 @@ pub fn r92su_register(dev: &mut R92suDevice) -> Result<()> {
         pr_err!("r92su_register: register_netdev failed: {}\n", e);
         e
     })?;
+
+    // Cache the net_device pointer for the RX delivery path.  Without this,
+    // rx_deliver() always falls into the pending_rx branch and data frames
+    // (including EAPOL) are never forwarded to the network stack.
+    if let Some(wiphy) = dev.wiphy.as_mut() {
+        let ndev = unsafe { rust_helper_get_netdev_ptr(wiphy.as_ptr() as *mut c_void) };
+        if ndev.is_null() {
+            pr_warn!("r92su_register: could not retrieve netdev pointer\n");
+        } else {
+            dev.netdev_ptr = ndev;
+            pr_debug!("r92su_register: netdev_ptr cached ({:p})\n", ndev);
+        }
+    }
 
     register_debugfs(dev).map_err(|e| {
         pr_err!("r92su_register: register_debugfs failed: {}\n", e);

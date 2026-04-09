@@ -52,6 +52,10 @@ extern "C" {
 
     fn rust_helper_cfg80211_disconnected(ndev: *mut c_void, reason: u16);
 
+    fn rust_helper_netif_carrier_on(ndev: *mut c_void);
+
+    fn rust_helper_netif_tx_wake_all_queues(ndev: *mut c_void);
+
     fn rust_helper_schedule_join_result(dev_ptr: *mut c_void, fn_ptr: extern "C" fn(*mut c_void));
 
     fn rust_helper_cfg80211_connect_params_get(
@@ -64,6 +68,7 @@ extern "C" {
         ie_buf_len: usize,
         auth_type_out: *mut u32,
         privacy_out: *mut u32,
+        wpa_versions_out: *mut u32,
     ) -> c_int;
 
     fn rust_helper_get_netdev_ptr(wiphy: *mut c_void) -> *mut c_void;
@@ -125,14 +130,15 @@ fn build_ht_ie(_dev: &R92suDevice) -> Option<[u8; 26]> {
 /// Build WMM IE for QoS.
 ///
 /// Mirrors `r92su_wmm_update()` from main.c.
-fn build_wmm_ie() -> [u8; 8] {
+fn build_wmm_ie() -> [u8; 9] {
     [
+        0xDD, // Element ID = WLAN_EID_VENDOR_SPECIFIC
+        0x07, // Length = 7
         0x00, 0x50, 0xf2, // Microsoft OUI
-        0x02, // Information Element
-        0x00, // Length (4 bytes after this)
+        0x02, // OUI Type = WMM
+        0x00, // WMM Subtype = Information Element
         0x01, // WME Version
         0x00, // WME QoS Info
-        0x00, // reserved
     ]
 }
 
@@ -205,6 +211,7 @@ extern "C" fn connect_callback(wiphy: *mut c_void, _ndev: *mut c_void, sme: *mut
     let mut ie_len: usize = 0;
     let mut auth_type: u32 = 0;
     let mut privacy: u32 = 0;
+    let mut wpa_versions: u32 = 0;
 
     // SAFETY: sme is a valid cfg80211_connect_params * from cfg80211; output
     // buffers are valid for the sizes we pass.
@@ -219,11 +226,29 @@ extern "C" fn connect_callback(wiphy: *mut c_void, _ndev: *mut c_void, sme: *mut
             ie_buf.len(),
             &mut auth_type,
             &mut privacy,
+            &mut wpa_versions,
         )
     };
     if ret != 0 {
         pr_err!("r92su: connect_params_get failed\n");
         return -22; // -EINVAL
+    }
+
+    // ── Send authentication mode to firmware ─────────────────────────────────
+    // For WPA/WPA2 connections, we must tell the firmware we're using PSK.
+    // Mirrors r92su_connect_set_auth() from main.c.
+    let (auth_mode, auth_1x) = if wpa_versions > 0 {
+        // WPA detected — use 802.1X auth mode with PSK key management
+        (cmd::AuthMode::Auth8021x, cmd::Auth1x::Psk)
+    } else if auth_type == 2 {
+        // NL80211_AUTHTYPE_SHARED_KEY
+        (cmd::AuthMode::Shared, cmd::Auth1x::Psk)
+    } else {
+        // Open system (or automatic without WPA)
+        (cmd::AuthMode::Open, cmd::Auth1x::Psk)
+    };
+    if let Err(e) = cmd::h2c_set_auth(dev, auth_mode, auth_1x) {
+        pr_warn!("r92su: connect: h2c_set_auth failed: {:?}\n", e);
     }
 
     // ── Locate the BSS in the scan cache ─────────────────────────────────────
@@ -346,6 +371,8 @@ extern "C" fn disconnect_callback(wiphy: *mut c_void, ndev: *mut c_void, reason:
     let _ = cmd::h2c_disconnect(dev);
     dev.set_state(State::Open);
     dev.connect_result = None;
+    // Remove the AP station entry (mac_id 0) that was added on join.
+    dev.sta_del(0);
     dev.bssid = [0u8; 6];
     dev.connect_ssid = [0u8; 32];
     dev.connect_ssid_len = 0;
@@ -443,8 +470,34 @@ extern "C" fn join_result_process(dev_ptr: *mut c_void) {
 
     let status: u16 = if firmware_joined {
         dev.set_state(State::Connected);
+
+        // The AP is station 0 in the RTL8192SU firmware.  Register it in the
+        // station table so that add_key can find it when the pairwise PTK is
+        // installed during the 4-way handshake.
+        // AID is at offset 20 in the c2h_join_bss_event payload.
+        const AID_OFFSET: usize = 20;
+        let aid = match dev.connect_result.as_ref() {
+            Some(r) if r.len() >= AID_OFFSET + 4 => u32::from_le_bytes([
+                r[AID_OFFSET],
+                r[AID_OFFSET + 1],
+                r[AID_OFFSET + 2],
+                r[AID_OFFSET + 3],
+            ]) as usize,
+            _ => 0,
+        };
+        if let Err(e) = dev.sta_alloc(&bssid, 0, aid) {
+            pr_warn!("r92su: join_result: could not alloc AP station: {:?}\n", e);
+        }
+
         if let Err(e) = cmd::h2c_set_power_mode(dev, 1, 0) {
             pr_warn!("r92su: failed to set power mode: {:?}\n", e);
+        }
+        // Signal carrier up and start TX queues so the EAPOL 4-way
+        // handshake frames can flow in both directions.
+        // SAFETY: ndev is valid for the duration of this call.
+        unsafe {
+            rust_helper_netif_carrier_on(ndev);
+            rust_helper_netif_tx_wake_all_queues(ndev);
         }
         pr_debug!("r92su: join BSS succeeded — reporting connected\n");
         0 // WLAN_STATUS_SUCCESS

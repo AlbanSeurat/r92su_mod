@@ -129,6 +129,7 @@ struct cfg80211_ops r92su_cfg80211_ops = {
 	.set_default_key      = NULL,
 	.get_station          = NULL,
 	.dump_station         = NULL,
+	.change_station       = NULL,
 	.change_virtual_intf  = NULL,
 	.join_ibss            = NULL,
 	.leave_ibss           = NULL,
@@ -852,6 +853,17 @@ void rust_helper_netif_tx_wake_all_queues(struct net_device *ndev)
 EXPORT_SYMBOL_GPL(rust_helper_netif_tx_wake_all_queues);
 
 /**
+ * rust_helper_netif_carrier_on - set carrier on for a net_device.
+ *
+ * Called after successful association to indicate link is up.
+ */
+void rust_helper_netif_carrier_on(struct net_device *ndev)
+{
+	netif_carrier_on(ndev);
+}
+EXPORT_SYMBOL_GPL(rust_helper_netif_carrier_on);
+
+/**
  * rust_helper_netif_carrier_off - set carrier off on a net_device.
  *
  * Called when the station is evicted or disconnected to stop transmission.
@@ -1222,9 +1234,6 @@ void rust_helper_cfg80211_connect_result(struct net_device *ndev,
 			     resp_ie, resp_ie_len,
 			     status, GFP_KERNEL,
 			     NL80211_TIMEOUT_UNSPECIFIED);
-
-	if (bss)
-		cfg80211_put_bss(wiphy, bss);
 }
 EXPORT_SYMBOL_GPL(rust_helper_cfg80211_connect_result);
 
@@ -1346,7 +1355,8 @@ int rust_helper_cfg80211_connect_params_get(
 	u8 *bssid_out,
 	u8 *ie_out, size_t *ie_len_out, size_t ie_buf_len,
 	u32 *auth_type_out,
-	u32 *privacy_out)
+	u32 *privacy_out,
+	u32 *wpa_versions_out)
 {
 	if (sme->ssid_len > 32)
 		return -EINVAL;
@@ -1368,6 +1378,7 @@ int rust_helper_cfg80211_connect_params_get(
 
 	*auth_type_out = sme->auth_type;
 	*privacy_out   = sme->privacy ? 1 : 0;
+	*wpa_versions_out = sme->crypto.wpa_versions;
 	return 0;
 }
 EXPORT_SYMBOL_GPL(rust_helper_cfg80211_connect_params_get);
@@ -1393,6 +1404,17 @@ void rust_helper_set_cfg80211_ops_dump_station(
 	r92su_cfg80211_ops.dump_station = fn;
 }
 EXPORT_SYMBOL_GPL(rust_helper_set_cfg80211_ops_dump_station);
+
+/**
+ * rust_helper_set_cfg80211_ops_change_station - set the .change_station callback.
+ */
+void rust_helper_set_cfg80211_ops_change_station(
+	int (*fn)(struct wiphy *wiphy, struct net_device *ndev,
+		  const u8 *mac, struct station_parameters *params))
+{
+	r92su_cfg80211_ops.change_station = fn;
+}
+EXPORT_SYMBOL_GPL(rust_helper_set_cfg80211_ops_change_station);
 
 /**
  * rust_helper_set_cfg80211_ops_change_virtual_intf - set the .change_virtual_intf callback.

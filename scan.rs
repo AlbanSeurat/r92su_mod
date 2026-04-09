@@ -615,6 +615,21 @@ fn inform_bss(wiphy: *mut c_void, bss_data: &[u8]) {
     // Get the channel from wiphy bands.
     let channel = find_channel(wiphy, ch_num);
 
+    // Check if channel was found; if not, skip this BSS.
+    if channel.is_null() {
+        pr_warn!(
+            "r92su: BSS {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} on unsupported channel {}\n",
+            bssid[0],
+            bssid[1],
+            bssid[2],
+            bssid[3],
+            bssid[4],
+            bssid[5],
+            ch_num
+        );
+        return;
+    }
+
     // Convert RSSI to signal strength (dBm).
     // RTL8192SU reports RSSI as a raw value; convert to dBm.
     let _signal = (rssi as i32 / 2) - 100;
