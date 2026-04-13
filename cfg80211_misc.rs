@@ -107,7 +107,7 @@ extern "C" fn change_virtual_intf_callback(
         }
     }
 
-    pr_debug!("r92su: change_virtual_intf: iftype={}\n", iftype);
+    pr_info!("r92su: change_virtual_intf: iftype={}\n", iftype);
     0
 }
 
@@ -139,7 +139,7 @@ extern "C" fn join_ibss_callback(
         return -5; // -EIO
     }
 
-    pr_debug!("r92su: join_ibss: joined IBSS\n");
+    pr_info!("r92su: join_ibss: joined IBSS\n");
     0
 }
 
@@ -160,7 +160,7 @@ extern "C" fn leave_ibss_callback(wiphy: *mut c_void, _ndev: *mut c_void) -> c_i
     // Clear BSSID
     dev.bssid = [0u8; ETH_ALEN];
 
-    pr_debug!("r92su: leave_ibss: left IBSS\n");
+    pr_info!("r92su: leave_ibss: left IBSS\n");
     0
 }
 
@@ -179,12 +179,12 @@ extern "C" fn set_wiphy_params_callback(
     // Handle RTS threshold changes (NL80211_ATTR_RTS_THRESHOLD)
     if changed & (1 << 2) != 0 {
         // TODO: Propagate RTS threshold to firmware via H2C or register write
-        pr_debug!("r92su: set_wiphy_params: RTS threshold changed\n");
+        pr_info!("r92su: set_wiphy_params: RTS threshold changed\n");
     }
 
     // TODO: Handle other wiphy params (frag threshold, retry limits, etc.)
 
-    pr_debug!("r92su: set_wiphy_params: changed=0x{:x}\n", changed);
+    pr_info!("r92su: set_wiphy_params: changed=0x{:x}\n", changed);
     0
 }
 
@@ -211,7 +211,7 @@ extern "C" fn set_monitor_channel_callback(
 
     // TODO: Extract channel from chandef and set it via h2c_set_channel
 
-    pr_debug!("r92su: set_monitor_channel: channel set\n");
+    pr_info!("r92su: set_monitor_channel: channel set\n");
     0
 }
 
@@ -225,5 +225,5 @@ pub fn init() {
         rust_helper_set_cfg80211_ops_set_wiphy_params(Some(set_wiphy_params_callback));
         rust_helper_set_cfg80211_ops_set_monitor_channel(Some(set_monitor_channel_callback));
     }
-    pr_debug!("r92su: misc cfg80211 operations initialized\n");
+    pr_info!("r92su: misc cfg80211 operations initialized\n");
 }

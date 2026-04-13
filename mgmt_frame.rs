@@ -46,7 +46,7 @@ extern "C" fn mgmt_frame_register_callback(
     _wdev: *mut c_void,
     _upd: *mut c_void,
 ) {
-    pr_debug!("r92su: update_mgmt_frame_registrations called\n");
+    pr_info!("r92su: update_mgmt_frame_registrations called\n");
 }
 
 // ── cfg80211 .mgmt_tx ────────────────────────────────────────────────────────
@@ -111,7 +111,7 @@ extern "C" fn mgmt_tx_callback(
     // SAFETY: cookie_out is a valid pointer provided by cfg80211.
     unsafe { cookie_out.write(cookie) };
 
-    pr_debug!("r92su: mgmt_tx: len={}, cookie={:#x}\n", len, cookie);
+    pr_info!("r92su: mgmt_tx: len={}, cookie={:#x}\n", len, cookie);
 
     // Validate frame is at least a management frame (minimum 24-byte header).
     if len < 24 {
@@ -131,7 +131,7 @@ extern "C" fn mgmt_tx_callback(
     // Check frame type from the FC field (first 2 bytes, little-endian).
     let fc = u16::from_le_bytes([frame[0], frame[1]]);
     let frame_type = fc & 0xFC; // Mask off subtype
-    pr_debug!(
+    pr_info!(
         "r92su: mgmt_tx: frame_control=0x{:04x}, type=0x{:02x}\n",
         fc,
         frame_type
@@ -176,7 +176,7 @@ pub fn init() {
         ));
         rust_helper_set_cfg80211_ops_mgmt_tx(Some(mgmt_tx_callback));
     }
-    pr_debug!(
+    pr_info!(
         "r92su: mgmt_tx and update_mgmt_frame_registrations cfg80211 operations initialized\n"
     );
 }

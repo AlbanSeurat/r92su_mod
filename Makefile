@@ -6,7 +6,7 @@ obj-m := rtl8192su.o
 rtl8192su-y := rtl8192su_main.o rust_helpers.o
 
 # Use LLVM toolchain for compilation
-ccflags-y := -D__KERNEL__ -I$(KDIR)/rust -I$(KDIR)/include -include $(KDIR)/include/linux/kconfig.h
+ccflags-y := -D__KERNEL__ -DDEBUG -I$(KDIR)/rust -I$(KDIR)/include -include $(KDIR)/include/linux/kconfig.h
 HOSTCFLAGS_MODULE   =
 CLANG_FLAGS_MODULE  =
 

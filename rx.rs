@@ -17,9 +17,10 @@
 //!                                    ──► rx_deliver()
 //! ```
 //!
-//! The delivery step (`rx_deliver`) queues the processed 802.11 frame onto
-//! `dev.pending_rx` for later consumption once `netif_rx()` bindings are
-//! available.  All other steps are functionally complete.
+//! The delivery step (`rx_deliver`) converts the 802.11 frame to 802.3 via
+//! `rust_helper_rx_deliver_80211()` and hands it to `netif_rx()`.  If the
+//! netdev pointer or device state is not yet ready the frame is queued in
+//! `dev.pending_rx` as a fallback.
 
 use core::ffi::c_void;
 
@@ -671,17 +672,50 @@ fn rx_deliver(dev: &mut R92suDevice, frame: KVec<u8>) {
     dev.rx_packets += 1;
 
     if !dev.netdev_ptr.is_null() && dev.is_open() {
+        pr_info!("r92su: rx_deliver delivering {} bytes\n", frame.len());
         // SAFETY: netdev_ptr was set from rust_helper_get_netdev_ptr() after
         // register_netdev() and is valid for the lifetime of the interface.
         // frame.as_ptr() / frame.len() are valid for the duration of this call.
         let ret =
             unsafe { rust_helper_rx_deliver_80211(dev.netdev_ptr, frame.as_ptr(), frame.len()) };
         if ret < 0 {
+            pr_warn!(
+                "r92su: rx_deliver_80211 failed: errno={}, frame_len={}\n",
+                ret,
+                frame.len()
+            );
             dev.rx_dropped += 1;
         }
     } else {
         // Device not yet open or no netdev — buffer the frame.
+        pr_info!(
+            "r92su: rx_deliver buffering {} bytes (netdev={:p}, is_open={})\n",
+            frame.len(),
+            dev.netdev_ptr,
+            dev.is_open()
+        );
         if dev.pending_rx.push(frame, GFP_ATOMIC).is_err() {
+            dev.rx_dropped += 1;
+        }
+    }
+}
+
+/// Drain any frames that were queued in `pending_rx` before the device was
+/// fully open.  Call this after both `netdev_ptr` and state `Open` are set.
+pub fn rx_flush_pending(dev: &mut R92suDevice) {
+    if dev.netdev_ptr.is_null() || !dev.is_open() {
+        return;
+    }
+    while let Some(frame) = dev.pending_rx.pop() {
+        // SAFETY: same as rx_deliver — netdev_ptr is valid for the interface lifetime.
+        let ret =
+            unsafe { rust_helper_rx_deliver_80211(dev.netdev_ptr, frame.as_ptr(), frame.len()) };
+        if ret < 0 {
+            pr_warn!(
+                "r92su: rx_flush_pending: deliver failed errno={}, frame_len={}\n",
+                ret,
+                frame.len()
+            );
             dev.rx_dropped += 1;
         }
     }
@@ -694,11 +728,54 @@ fn rx_deliver(dev: &mut R92suDevice, frame: KVec<u8>) {
 /// Runs it through the full receive pipeline; delivers the frame if it
 /// passes all checks.
 fn process_data_frame(dev: &mut R92suDevice, desc: &RxDesc, raw_frame: &[u8]) {
+    let fc = if raw_frame.len() >= 2 {
+        u16::from_le_bytes([raw_frame[0], raw_frame[1]])
+    } else {
+        0
+    };
+    pr_info!(
+        "r92su: RX frame arrived: len={}, fc={:04x}, rate={}, ht={}, bw_40={}\n",
+        raw_frame.len(),
+        fc,
+        desc.rx_mcs(),
+        desc.rx_ht(),
+        desc.bw_40()
+    );
+    if raw_frame.len() >= 24 {
+        pr_info!(
+            "r92su:   addr1={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
+            raw_frame[4],
+            raw_frame[5],
+            raw_frame[6],
+            raw_frame[7],
+            raw_frame[8],
+            raw_frame[9]
+        );
+        pr_info!(
+            "r92su:   addr2={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
+            raw_frame[10],
+            raw_frame[11],
+            raw_frame[12],
+            raw_frame[13],
+            raw_frame[14],
+            raw_frame[15]
+        );
+        pr_info!(
+            "r92su:   addr3={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
+            raw_frame[16],
+            raw_frame[17],
+            raw_frame[18],
+            raw_frame[19],
+            raw_frame[20],
+            raw_frame[21]
+        );
+    }
     // ── Header check ─────────────────────────────────────────────────────────
     let mut meta = RxMeta::new();
     let frame_slice = match rx_hw_header_check(desc, raw_frame, &mut meta) {
         Ok(f) => f,
         Err(_) => {
+            pr_info!("r92su: process_data_frame dropped at header check\n");
             dev.rx_dropped += 1;
             return;
         }
@@ -707,6 +784,7 @@ fn process_data_frame(dev: &mut R92suDevice, desc: &RxDesc, raw_frame: &[u8]) {
     // ── Clone frame into owned buffer ─────────────────────────────────────────
     let mut frame: KVec<u8> = KVec::new();
     if frame.extend_from_slice(frame_slice, GFP_ATOMIC).is_err() {
+        pr_info!("r92su: process_data_frame dropped at alloc\n");
         dev.rx_dropped += 1;
         return;
     }
@@ -717,6 +795,7 @@ fn process_data_frame(dev: &mut R92suDevice, desc: &RxDesc, raw_frame: &[u8]) {
     // ── Deduplication ────────────────────────────────────────────────────────
     match rx_deduplicate(dev, &frame, &meta) {
         RxControl::Drop => {
+            pr_info!("r92su: process_data_frame dropped at dedup\n");
             dev.rx_dropped += 1;
             return;
         }
@@ -728,7 +807,10 @@ fn process_data_frame(dev: &mut R92suDevice, desc: &RxDesc, raw_frame: &[u8]) {
 
     // ── Management frame handling ────────────────────────────────────────────
     match rx_handle_mgmt(&frame) {
-        RxControl::Queue | RxControl::Drop => return,
+        RxControl::Queue | RxControl::Drop => {
+            pr_info!("r92su: process_data_frame mgmt dropped\n");
+            return;
+        }
         RxControl::Continue => {}
     }
 
@@ -737,6 +819,7 @@ fn process_data_frame(dev: &mut R92suDevice, desc: &RxDesc, raw_frame: &[u8]) {
     let (ctrl, frame_opt) = rx_reorder_ampdu(dev, frame, &meta, &mut reordered);
     match ctrl {
         RxControl::Drop => {
+            pr_info!("r92su: process_data_frame dropped at ampdu\n");
             dev.rx_dropped += 1;
             return;
         }
@@ -755,6 +838,7 @@ fn process_data_frame(dev: &mut R92suDevice, desc: &RxDesc, raw_frame: &[u8]) {
         for released in reordered.drain_all() {
             deliver_one(dev, released, &meta);
         }
+        pr_info!("r92su: process_data_frame passing frame to deliver_one\n");
         deliver_one(dev, f, &meta);
     }
 }
@@ -801,6 +885,11 @@ pub fn r92su_rx(dev: &mut R92suDevice, buf: &[u8]) {
         None => return,
     };
     let pkt_cnt = first_desc.pktcnt().max(1);
+    pr_info!(
+        "r92su: USB RX buffer: {} bytes, {} packets\n",
+        buf.len(),
+        pkt_cnt
+    );
 
     let mut pos = 0usize;
     let mut remaining = pkt_cnt;
@@ -817,7 +906,7 @@ pub fn r92su_rx(dev: &mut R92suDevice, buf: &[u8]) {
         let hdr_len = RX_DESC_SIZE + drvinfo;
 
         if pos + hdr_len + shift + pkt_len > max_len {
-            pr_debug!("r92su rx: clipped frame at pos={}\n", pos);
+            pr_info!("r92su rx: clipped frame at pos={}\n", pos);
             break;
         }
 

@@ -90,6 +90,8 @@ struct TxMeta {
     ht_possible: bool,
     /// True if A-MPDU aggregation is active for this TID.
     ampdu: bool,
+    /// True if the 802.11 frame carries a QoS control field.
+    is_qos: bool,
     /// QoS TID (0–15).
     tid: u8,
     /// True if the WEP/TKIP/CCMP protect bit was set on the frame.
@@ -113,6 +115,7 @@ impl TxMeta {
             low_rate: false,
             ht_possible: false,
             ampdu: false,
+            is_qos: false,
             tid: 0,
             has_protect: false,
             is_bmc: false,
@@ -400,14 +403,18 @@ fn build_tx_desc(desc: &mut [u8; TX_DESC_SIZE], pkt_size: usize, meta: &TxMeta, 
     }
 }
 
-/// Helper: check if QoS data from meta (approximated by non-zero tid or ampdu).
+/// Helper: true if the frame carries a QoS control field, derived from the actual FC.
 fn is_data_qos_from_meta(meta: &TxMeta) -> bool {
-    meta.tid > 0 || meta.ampdu
+    meta.is_qos
 }
 
 // ── Pipeline ──────────────────────────────────────────────────────────────────
 
 /// Locate the destination station in the station table and fill metadata.
+/// Returns `true` if a station was found, `false` if no station is available.
+/// When `false` is returned, the caller should drop the frame (matching the C
+/// driver's behavior where `r92su_tx_find_sta` returns `TX_DROP` when no BSS
+/// station exists).
 fn tx_find_sta(dev: &R92suDevice, frame: &[u8], meta: &mut TxMeta) -> bool {
     let da = frame_da(frame);
     meta.is_bmc = is_multicast(&da);
@@ -419,12 +426,20 @@ fn tx_find_sta(dev: &R92suDevice, frame: &[u8], meta: &mut TxMeta) -> bool {
             return true;
         }
     }
+
     // Fallback to station 0 (the AP / BSSID station).
-    if !dev.sta_list.is_empty() {
+    // Only access if the list is not empty.
+    if let Some(sta) = dev.sta_list.first() {
         meta.sta_idx = 0;
-        meta.ht_possible = dev.sta_list[0].ht_sta;
+        meta.ht_possible = sta.ht_sta;
+        true
+    } else {
+        // No station available — the BSS station must be added before we can TX.
+        // This mirrors the C driver's r92su_tx_find_sta which returns TX_DROP
+        // when bss_priv->sta is NULL.
+        pr_info!("r92su tx: no station available for TX\n");
+        false
     }
-    true
 }
 
 /// Select the encryption key for the frame.
@@ -461,6 +476,7 @@ fn tx_set_priority(frame: &[u8], meta: &mut TxMeta) {
         } else {
             0
         };
+        meta.is_qos = true;
         meta.tid = tid;
         meta.priority = tid & 0x7;
         let ac = tid_to_ac(tid);
@@ -547,7 +563,13 @@ pub fn r92su_tx(dev: &mut R92suDevice, frame: &[u8], mac_id: usize) -> Result<()
 
     // ── Classify the frame ────────────────────────────────────────────────────
     tx_set_priority(frame, &mut meta);
-    tx_find_sta(dev, frame, &mut meta);
+    // tx_find_sta returns false when no station is available (e.g., before
+    // association).  This mirrors the C driver's check: if (!bss_priv->sta)
+    // return TX_DROP;
+    if !tx_find_sta(dev, frame, &mut meta) {
+        dev.tx_dropped += 1;
+        return Err(crate::r92u::R92suError::Io("no station for TX"));
+    }
     tx_select_key(dev, frame, &mut meta);
     tx_low_rate_hint(frame, &mut meta);
 
@@ -591,7 +613,7 @@ pub fn r92su_tx(dev: &mut R92suDevice, frame: &[u8], mac_id: usize) -> Result<()
     dev.tx_packets += 1;
     dev.tx_bytes += pkt_size as u64;
 
-    pr_debug!(
+    pr_info!(
         "r92su tx: {} bytes queued (mac_id={})\n",
         pkt_size,
         effective_mac_id
@@ -599,7 +621,7 @@ pub fn r92su_tx(dev: &mut R92suDevice, frame: &[u8], mac_id: usize) -> Result<()
 
     // Log packet being sent into the network.
     let log_len = core::cmp::min(64, frame_buf.len());
-    pr_debug!(
+    pr_info!(
         "r92su tx: sending {} bytes: {:02x?}\n",
         log_len,
         &frame_buf[..log_len]

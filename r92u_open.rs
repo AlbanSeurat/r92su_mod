@@ -65,6 +65,7 @@ extern "C" fn rx_complete_callback(dev_ptr: *mut c_void, data: *const u8, len: u
     // is valid for the lifetime of the USB interface.  data/len come from the
     // URB transfer buffer, which is valid for `len` bytes.
     let dev = unsafe { &mut *(dev_ptr as *mut R92suDevice) };
+    pr_info!("r92su: RX callback called, len={}\n", len);
     let buf = unsafe { core::slice::from_raw_parts(data, len) };
     rx::r92su_rx(dev, buf);
 }
@@ -79,7 +80,7 @@ extern "C" fn tx_complete_callback(dev_ptr: *mut c_void) {
 
     dev.tx_pending_urbs
         .fetch_sub(1, core::sync::atomic::Ordering::AcqRel);
-    pr_debug!(
+    pr_info!(
         "r92su: TX complete, pending={}\n",
         dev.tx_pending_urbs
             .load(core::sync::atomic::Ordering::Acquire)
@@ -120,7 +121,7 @@ pub fn ndo_open_init() {
     unsafe {
         rust_helper_set_ndo_open(Some(ndo_open_callback));
     }
-    pr_debug!("r92su: ndo_open callback registered\n");
+    pr_info!("r92su: ndo_open callback registered\n");
 }
 
 // ── r92su_open ────────────────────────────────────────────────────────────────
@@ -147,7 +148,7 @@ pub fn r92su_open(dev: &mut R92suDevice, firmware: &[u8]) -> Result<()> {
         pr_err!("r92su_open: hw_early_mac_setup failed: {}\n", e);
         e
     })?;
-    pr_debug!("r92su_open: early MAC setup complete\n");
+    pr_info!("r92su_open: early MAC setup complete\n");
 
     fw::upload_firmware(
         dev,
@@ -160,25 +161,25 @@ pub fn r92su_open(dev: &mut R92suDevice, firmware: &[u8]) -> Result<()> {
         pr_err!("r92su_open: firmware upload failed: {}\n", e);
         e
     })?;
-    pr_debug!("r92su_open: firmware uploaded ({} bytes)\n", firmware.len());
+    pr_info!("r92su_open: firmware uploaded ({} bytes)\n", firmware.len());
 
     cmd::cmd_init(dev);
-    pr_debug!("r92su_open: command subsystem initialized\n");
+    pr_info!("r92su_open: command subsystem initialized\n");
 
     hw_late_mac_setup(dev).map_err(|e| {
         pr_err!("r92su_open: hw_late_mac_setup failed: {}\n", e);
         e
     })?;
-    pr_debug!("r92su_open: late MAC setup complete\n");
+    pr_info!("r92su_open: late MAC setup complete\n");
 
     init_mac(dev).map_err(|e| {
         pr_err!("r92su_open: init_mac failed: {}\n", e);
         e
     })?;
-    pr_debug!("r92su_open: MAC initialized\n");
+    pr_info!("r92su_open: MAC initialized\n");
 
     dev.set_state(State::Open);
-    pr_debug!("r92su_open: device opened successfully\n");
+    pr_info!("r92su_open: device opened successfully\n");
 
     // Register the RX callback and submit bulk-in URBs so the driver can
     // receive C2H firmware events (Survey, SurveyDone, etc.).
@@ -194,7 +195,7 @@ pub fn r92su_open(dev: &mut R92suDevice, firmware: &[u8]) -> Result<()> {
         if ret < 0 {
             pr_err!("r92su_open: failed to submit RX URBs (err={})\n", ret);
         } else {
-            pr_debug!(
+            pr_info!(
                 "r92su_open: 8 RX URBs submitted on ep={:#04x}\n",
                 ep.address
             );
@@ -208,6 +209,9 @@ pub fn r92su_open(dev: &mut R92suDevice, firmware: &[u8]) -> Result<()> {
     unsafe {
         rust_helper_set_tx_complete_fn(Some(tx_complete_callback), dev_ptr);
     }
+
+    // Deliver any frames that were buffered before the device was fully open.
+    rx::rx_flush_pending(dev);
 
     Ok(())
 }
@@ -257,7 +261,7 @@ extern "C" fn ndo_stop_callback(dev_ptr: *mut c_void) -> i32 {
     unsafe { rust_helper_kill_tx_urbs() };
 
     dev.set_state(State::Stop);
-    pr_debug!("r92su: interface stopped\n");
+    pr_info!("r92su: interface stopped\n");
     0
 }
 
@@ -270,5 +274,5 @@ pub fn ndo_xmit_stop_init() {
         rust_helper_set_ndo_start_xmit(Some(start_xmit_callback));
         rust_helper_set_ndo_stop(Some(ndo_stop_callback));
     }
-    pr_debug!("r92su: ndo_start_xmit and ndo_stop callbacks registered\n");
+    pr_info!("r92su: ndo_start_xmit and ndo_stop callbacks registered\n");
 }

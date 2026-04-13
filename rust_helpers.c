@@ -942,6 +942,7 @@ int rust_helper_submit_one_tx_urb(struct usb_device *udev, u8 endpoint,
 	pipe = usb_sndbulkpipe(udev, endpoint & USB_ENDPOINT_NUMBER_MASK);
 	usb_fill_bulk_urb(ctx->urb, udev, pipe,
 			  ctx->buf, len, r92su_tx_complete, ctx);
+	ctx->urb->transfer_flags |= URB_ZERO_PACKET;
 
 	err = usb_submit_urb(ctx->urb, GFP_ATOMIC);
 	if (err) {

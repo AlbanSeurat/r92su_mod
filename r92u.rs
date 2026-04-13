@@ -448,7 +448,7 @@ impl R92suDevice {
     }
 
     pub fn set_state(&mut self, new_state: State) {
-        pr_debug!("r92su: state {:?} -> {:?}\n", self.state, new_state);
+        pr_info!("r92su: state {:?} -> {:?}\n", self.state, new_state);
         self.state = new_state;
     }
 }
@@ -572,7 +572,7 @@ impl HwRegs {
     }
 
     pub fn write8(&mut self, reg: u16, val: u8) -> Result<()> {
-        pr_debug!("REG[{:#06x}] <- {:#04x}\n", reg, val);
+        pr_info!("REG[{:#06x}] <- {:#04x}\n", reg, val);
         for i in 0..self.len {
             if self.data[i].0 == reg {
                 self.data[i].1 = val;
@@ -911,7 +911,7 @@ pub fn r92su_usb_init(
     endpoints: &[UsbEndpoint],
     _firmware: &[u8],
 ) -> Result<()> {
-    pr_debug!(
+    pr_info!(
         "r92su_usb_init: starting for {:04x}:{:04x}\n",
         dev.vendor_id,
         dev.product_id
@@ -922,7 +922,7 @@ pub fn r92su_usb_init(
         pr_err!("r92su_usb_init: endpoint discovery failed: {}\n", e);
         e
     })?;
-    pr_debug!(
+    pr_info!(
         "r92su_usb_init: endpoints OK  in={:#04x}  out={:#04x}\n",
         dev.bulk_in.unwrap().address,
         dev.bulk_out.unwrap().address
@@ -937,7 +937,7 @@ pub fn r92su_usb_init(
         pr_err!("r92su_usb_init: RX URB allocation failed: {}\n", e);
         e
     })?;
-    pr_debug!(
+    pr_info!(
         "r92su_usb_init: URBs allocated  tx={}  rx={}\n",
         dev.tx_queue.urbs.len(),
         dev.rx_queue.urbs.len()
@@ -948,10 +948,10 @@ pub fn r92su_usb_init(
         pr_err!("r92su_usb_init: hardware register init failed: {}\n", e);
         e
     })?;
-    pr_debug!("r92su_usb_init: hardware registers bootstrapped\n");
+    pr_info!("r92su_usb_init: hardware registers bootstrapped\n");
 
     dev.set_state(State::Stop);
-    pr_debug!("r92su_usb_init: initialisation complete\n");
+    pr_info!("r92su_usb_init: initialisation complete\n");
     Ok(())
 }
 
@@ -1171,7 +1171,7 @@ pub fn bulk_out_write(dev: &mut R92suDevice, data: &[u8]) -> Result<()> {
         return Err(R92suError::Io("failed to submit TX URB"));
     }
 
-    pr_debug!(
+    pr_info!(
         "bulk_out_write: submitted {} bytes on ep={:#04x}\n",
         data.len(),
         ep.address
@@ -1227,7 +1227,7 @@ pub fn hw_early_mac_setup(dev: &mut R92suDevice) -> Result<()> {
         }
     }
 
-    pr_debug!("r92su_hw_early_mac_setup: early MAC setup complete\n");
+    pr_info!("r92su_hw_early_mac_setup: early MAC setup complete\n");
     Ok(())
 }
 
@@ -1426,7 +1426,7 @@ fn usb_init_b_and_c_cut(dev: &mut R92suDevice) -> Result<()> {
         }
     }
 
-    pr_debug!("r92su: B/C cut hardware init complete\n");
+    pr_info!("r92su: B/C cut hardware init complete\n");
     Ok(())
 }
 
@@ -1459,7 +1459,7 @@ pub fn cmd_init(_dev: &mut R92suDevice) {
     // Sequence counter is reset by crate::cmd::cmd_init(); this stub keeps
     // the old call-site in r92u_open.rs working until it is updated to call
     // the real function from cmd.rs.
-    pr_debug!("r92su_cmd_init: command subsystem initialized\n");
+    pr_info!("r92su_cmd_init: command subsystem initialized\n");
 }
 
 const REG_TCR: u16 = 0x0044;
@@ -1744,7 +1744,7 @@ pub fn hw_late_mac_setup(dev: &mut R92suDevice) -> Result<()> {
     macconfig_after_fwdownload(dev)?;
     usb_final_macconfig(dev)?;
     wps_cfg_inputmethod(dev)?;
-    pr_debug!("r92su_hw_late_mac_setup: late MAC setup complete\n");
+    pr_info!("r92su_hw_late_mac_setup: late MAC setup complete\n");
     Ok(())
 }
 
@@ -1783,7 +1783,7 @@ pub fn init_mac(dev: &mut R92suDevice) -> Result<()> {
         e
     })?;
 
-    pr_debug!("r92su_init_mac: MAC initialized (channel={})\n", ch);
+    pr_info!("r92su_init_mac: MAC initialized (channel={})\n", ch);
     dev.set_state(State::Init);
     Ok(())
 }
