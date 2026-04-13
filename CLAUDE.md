@@ -2,11 +2,18 @@
 
 ## Project Overview
 
-This is a Linux kernel module for RTL8192SU WLAN adapters, written in Rust using the Linux kernel's Rust infrastructure (Rust for Linux). It is a cfg80211 FullMAC USB driver.
+This is a Linux kernel module for RTL8192SU/RTL8188SU WLAN adapters, written in Rust using the Linux kernel's Rust infrastructure (Rust for Linux). It is a cfg80211 FullMAC USB driver.
+
+The driver is organized into modules that mirror the original C implementation structure for easier porting and maintenance.
 
 ## Reference Implementation
 
-This code is inspired by the C implementation at https://github.com/AlbanSeurat/rtl8192su (located in the `r92su` directory). When writing new code for this driver, use that repository as a reference for the expected behavior, data structures, and hardware interaction patterns. Translate C constructs into idiomatic Rust/kernel-Rust equivalents.
+The code is based on the C implementation at https://github.com/AlbanSeurat/rtl8192su (located in the `r92su` directory). When writing new code:
+
+1. First understand the behavior from the C reference
+2. Study the data structures and hardware interaction patterns
+3. Translate C constructs into idiomatic Rust/kernel-Rust equivalents
+4. Maintain functional equivalence with the C code
 
 ## Build Commands
 
@@ -54,7 +61,6 @@ To run KUnit tests generally:
 
 ### Imports
 - Use vertical layout for imports with trailing `//` comments to preserve formatting
-- Example:
 ```rust
 use kernel::{
     device::Core,
@@ -73,6 +79,8 @@ use kernel::{
 - Follow standard Rust naming conventions
 - When wrapping C concepts, use names close to the C side but with Rust casing
 - Types wrapping C enums should be Rust enums with `#[repr(u32)]`
+- Private modules use snake_case: `r92u_open.rs`
+- Public APIs use Rust conventions
 
 ### Error Handling
 - Use the kernel's `Result` type from the prelude (`kernel::prelude::Result`)
@@ -84,9 +92,15 @@ use kernel::{
 - Prefer `#[expect(lint)]` over `#[allow(lint)]` when the lint is expected to be fulfilled
 - Use `#[allow(lint)]` for conditional compilation cases or macro expansions
 
-### Kernel-Specific Patterns
+## Kernel-Specific Patterns
 
-#### Module structure
+### Module Structure
+The main module (`rtl8192su_main.rs`) contains:
+- Module-level documentation
+- USB device table definition
+- `usb::Driver` trait implementation
+- Module registration macro
+
 ```rust
 // SPDX-License-Identifier: GPL-2.0
 // SPDX-FileCopyrightText: Copyright (C) 2026 <Name>
@@ -121,26 +135,34 @@ kernel::module_usb_driver! {
 }
 ```
 
-#### Null pointers
-Use `core::ptr::null()` or `core::ptr::null_mut()` for raw pointers.
-
-#### Atomic types
+### Null Pointers
 ```rust
-use core::sync::atomic::AtomicU32;
-pub tx_pending_urbs: AtomicU32::new(0),
+use core::ptr::null;
+use core::ptr::null_mut;
 ```
 
-#### Enums with C equivalents
+### Atomic Types
+```rust
+use core::sync::atomic::{AtomicU32, Ordering};
+
+pub tx_pending_urbs: AtomicU32::new(0),
+
+// Usage with explicit ordering
+count.fetch_add(1, Ordering::Relaxed);
+```
+
+### Enums with C Equivalents
 ```rust
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum State {
     Dead = 0,
+    Active = 1,
     // ...
 }
 ```
 
-#### Unsafe traits
+### Unsafe Traits
 ```rust
 unsafe impl kernel::sync::aref::AlwaysRefCounted for MyStruct {
     fn inc_ref(&self) {}
@@ -148,17 +170,106 @@ unsafe impl kernel::sync::aref::AlwaysRefCounted for MyStruct {
 }
 ```
 
-### File Organization
-- Main driver code in `rtl8192su.rs`
-- Device-specific structures in separate modules (e.g., `r92.rs`)
-- License header required on every file (SPDX identifiers)
+### PinInit for Complex Structures
+When structures need to be pinned in memory (e.g., for DMA or self-references):
+```rust
+fn probe(...) -> impl PinInit<Self, Error> {
+    pin_init! {
+        MyStruct {
+            field1: some_value,
+            field2: another_value,
+            // ...
+        }
+    }
+}
+```
 
-### Testing in Rust kernel modules
+## File Organization
+
+### Core Modules
+| File | Purpose |
+|------|---------|
+| `rtl8192su_main.rs` | Main entry point, USB registration, device table |
+| `usb_probe.rs` | USB device probe/attach logic |
+| `usb_register.rs` | Device registration with subsystems |
+| `usb_setup.rs` | USB endpoint configuration |
+| `netdev.rs` | Network device operations |
+
+### cfg80211 Integration
+| File | Purpose |
+|------|---------|
+| `cfg80211.rs` | Main cfg80211 ops implementation |
+| `cfg80211_misc.rs` | Helper functions for cfg80211 |
+| `connect.rs` | Connection management |
+| `scan.rs` | Scanning operations |
+
+### Hardware Abstraction (r92u)
+| File | Purpose |
+|------|---------|
+| `r92u.rs` | Hardware-specific operations |
+| `r92u_open.rs` | Device open/close logic |
+| `r92u_alloc.rs` | Memory allocation helpers |
+
+### Data Paths
+| File | Purpose |
+|------|---------|
+| `tx.rs` | Transmit path |
+| `rx.rs` | Receive path |
+
+### Supporting Modules
+| File | Purpose |
+|------|---------|
+| `cmd.rs` | Firmware command interface |
+| `fw.rs` | Firmware loading |
+| `event.rs` | Event handling from hardware |
+| `keys.rs` | Cryptographic key management |
+| `mgmt_frame.rs` | Management frame handling |
+| `sta.rs` | Station handling |
+| `station_info.rs` | Station statistics |
+| `tdls.rs` | TDLS support |
+| `anchor.rs` | USB URB anchoring |
+| `debugfs.rs` | Debug filesystem interface |
+
+## Porting Strategy
+
+When adding features from the C reference:
+
+1. **Identify the C code** - Find the relevant functions in the C implementation
+2. **Understand the flow** - Follow the call chain to understand context
+3. **Create Rust module** - Add to existing module or create new file
+4. **Define types** - Translate C structs to Rust structs, use `#[repr(C)]` if needed
+5. **Implement logic** - Translate functions, handling error propagation
+6. **Test incrementally** - Build and test after each logical unit
+
+## Testing in Rust Kernel Modules
+
 - Use `#[kunit_tests(suite_name)]` attribute for unit tests
-- Use doctests (`/// ```rust ... ```) for documentation examples
+- Use doctests (`/// ```rust ... ````) for documentation examples
 - Assert with standard `assert!` and `assert_eq!` macros (mapped to KUnit)
 
+## Debugging Tips
 
-## Claude specific 
+### Debugfs Interface
+The driver provides debugfs entries at `/sys/kernel/debug/r92su/`:
+- `registers` - Read hardware registers
+- `stats` - Driver statistics
+- `txqueues` - TX queue state
 
-When exiting plan mode to begin implementation, ALWAYS save the implementation plan first as a markdown file in docs/
+### Useful Commands
+```bash
+# Check module loaded
+lsmod | grep rtl8192su
+
+# View kernel messages
+dmesg | grep -E "(r92su|rtl8192)"
+
+# Check debugfs
+ls -la /sys/kernel/debug/r92su/
+
+# Monitor interface
+iw dev wlan0 monitor
+```
+
+## Claude Specific
+
+When exiting plan mode to begin implementation, ALWAYS save the implementation plan first as a markdown file in `docs/`.
