@@ -1111,8 +1111,6 @@ int rust_helper_rx_deliver_80211(struct net_device *ndev,
 	ret = netif_receive_skb(skb);
 	if (ret != 0 && ret != 1)
 		netdev_err(ndev, "netif_receive_skb unexpected return: %d\n", ret);
-	else
-	    netdev_err(ndev, "netif_receive_skb expected return: %d\n", ret);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(rust_helper_rx_deliver_80211);
@@ -1728,23 +1726,6 @@ static int r92su_debugfs_open(struct inode *inode, struct file *file)
 	return 0;
 }
 
-/* Forward declarations of file_operations structs */
-extern const struct file_operations r92su_debugfs_tx_pending_urbs_fops;
-extern const struct file_operations r92su_debugfs_hw_ioread_fops;
-extern const struct file_operations r92su_debugfs_chip_rev_fops;
-extern const struct file_operations r92su_debugfs_eeprom_type_fops;
-extern const struct file_operations r92su_debugfs_rf_type_fops;
-extern const struct file_operations r92su_debugfs_h2c_seq_fops;
-extern const struct file_operations r92su_debugfs_c2h_seq_fops;
-extern const struct file_operations r92su_debugfs_cpwm_fops;
-extern const struct file_operations r92su_debugfs_rpwm_fops;
-extern const struct file_operations r92su_debugfs_rx_queue_len_fops;
-extern const struct file_operations r92su_debugfs_sta_table_fops;
-extern const struct file_operations r92su_debugfs_connected_bss_fops;
-extern const struct file_operations r92su_debugfs_eeprom_fops;
-extern const struct file_operations r92su_debugfs_eeprom_raw_fops;
-extern const struct file_operations r92su_debugfs_hw_iowrite_fops;
-
 /* Forward declarations of Rust FFI functions */
 extern size_t r92su_debugfs_sta_table(void *dev_ptr, char *buf, size_t buf_size);
 extern size_t r92su_debugfs_connected_bss(void *dev_ptr, char *buf, size_t buf_size);
@@ -1863,76 +1844,6 @@ static ssize_t r92su_debugfs_eeprom_raw_read(struct file *file,
 	return simple_read_from_buffer(userbuf, count, ppos, buf, len);
 }
 
-/**
- * rust_helper_debugfs_create - create debugfs entries for the device.
- *
- * @dev:        the device pointer (passed to read/write callbacks)
- * @wiphy:     the wiphy (debugfs parent directory is wiphy->debugfsdir)
- *
- * Creates a directory named after the module and populates it with the
- * debugfs files (tx_pending_urbs, hw_ioread, hw_iowrite, chip_rev, etc.).
- * Returns a pointer to the created directory (or NULL on error).
- */
-struct dentry *rust_helper_debugfs_create(void *dev, struct wiphy *wiphy)
-{
-	struct dentry *dfs;
-
-	if (!wiphy || !wiphy->debugfsdir)
-		return NULL;
-
-	dfs = debugfs_create_dir("rtl8192su", wiphy->debugfsdir);
-	if (!dfs)
-		return NULL;
-
-	/* Read-only files */
-	debugfs_create_file("tx_pending_urbs", S_IRUSR, dfs, dev,
-			    &r92su_debugfs_tx_pending_urbs_fops);
-	debugfs_create_file("hw_ioread", S_IRUSR, dfs, dev,
-			    &r92su_debugfs_hw_ioread_fops);
-	debugfs_create_file("chip_rev", S_IRUSR, dfs, dev,
-			    &r92su_debugfs_chip_rev_fops);
-	debugfs_create_file("eeprom_type", S_IRUSR, dfs, dev,
-			    &r92su_debugfs_eeprom_type_fops);
-	debugfs_create_file("rf_type", S_IRUSR, dfs, dev,
-			    &r92su_debugfs_rf_type_fops);
-	debugfs_create_file("sta_table", S_IRUSR, dfs, dev,
-			    &r92su_debugfs_sta_table_fops);
-	debugfs_create_file("connected_bss", S_IRUSR, dfs, dev,
-			    &r92su_debugfs_connected_bss_fops);
-	debugfs_create_file("eeprom", S_IRUSR, dfs, dev,
-			    &r92su_debugfs_eeprom_fops);
-	debugfs_create_file("eeprom_raw", S_IRUSR, dfs, dev,
-			    &r92su_debugfs_eeprom_raw_fops);
-	debugfs_create_file("h2c_seq", S_IRUSR, dfs, dev,
-			    &r92su_debugfs_h2c_seq_fops);
-	debugfs_create_file("c2h_seq", S_IRUSR, dfs, dev,
-			    &r92su_debugfs_c2h_seq_fops);
-	debugfs_create_file("cpwm", S_IRUSR, dfs, dev,
-			    &r92su_debugfs_cpwm_fops);
-	debugfs_create_file("rpwm", S_IRUSR, dfs, dev,
-			    &r92su_debugfs_rpwm_fops);
-	debugfs_create_file("rx_queue_len", S_IRUSR, dfs, dev,
-			    &r92su_debugfs_rx_queue_len_fops);
-
-	/* Write-only files */
-	debugfs_create_file("hw_iowrite", S_IWUSR, dfs, dev,
-			    &r92su_debugfs_hw_iowrite_fops);
-
-	return dfs;
-}
-EXPORT_SYMBOL_GPL(rust_helper_debugfs_create);
-
-/**
- * rust_helper_debugfs_remove - remove debugfs entries.
- *
- * @dfs: the debugfs directory pointer returned by rust_helper_debugfs_create
- */
-void rust_helper_debugfs_remove(struct dentry *dfs)
-{
-	if (dfs)
-		debugfs_remove_recursive(dfs);
-}
-EXPORT_SYMBOL_GPL(rust_helper_debugfs_remove);
 
 /* ---------------------------------------------------------------------------
  * Debugfs callbacks — called from debugfs read handlers to get Rust data
@@ -2207,4 +2118,75 @@ static const struct file_operations r92su_debugfs_hw_iowrite_fops = {
 	.open  = r92su_debugfs_open,
 	.write = r92su_debugfs_hw_iowrite_write,
 };
+
+/**
+ * rust_helper_debugfs_create - create debugfs entries for the device.
+ *
+ * @dev:        the device pointer (passed to read/write callbacks)
+ * @wiphy:     the wiphy (debugfs parent directory is wiphy->debugfsdir)
+ *
+ * Creates a directory named after the module and populates it with the
+ * debugfs files (tx_pending_urbs, hw_ioread, hw_iowrite, chip_rev, etc.).
+ * Returns a pointer to the created directory (or NULL on error).
+ */
+struct dentry *rust_helper_debugfs_create(void *dev, struct wiphy *wiphy)
+{
+	struct dentry *dfs;
+
+	if (!wiphy || !wiphy->debugfsdir)
+		return NULL;
+
+	dfs = debugfs_create_dir("rtl8192su", wiphy->debugfsdir);
+	if (!dfs)
+		return NULL;
+
+	/* Read-only files */
+	debugfs_create_file("tx_pending_urbs", S_IRUSR, dfs, dev,
+			    &r92su_debugfs_tx_pending_urbs_fops);
+	debugfs_create_file("hw_ioread", S_IRUSR, dfs, dev,
+			    &r92su_debugfs_hw_ioread_fops);
+	debugfs_create_file("chip_rev", S_IRUSR, dfs, dev,
+			    &r92su_debugfs_chip_rev_fops);
+	debugfs_create_file("eeprom_type", S_IRUSR, dfs, dev,
+			    &r92su_debugfs_eeprom_type_fops);
+	debugfs_create_file("rf_type", S_IRUSR, dfs, dev,
+			    &r92su_debugfs_rf_type_fops);
+	debugfs_create_file("sta_table", S_IRUSR, dfs, dev,
+			    &r92su_debugfs_sta_table_fops);
+	debugfs_create_file("connected_bss", S_IRUSR, dfs, dev,
+			    &r92su_debugfs_connected_bss_fops);
+	debugfs_create_file("eeprom", S_IRUSR, dfs, dev,
+			    &r92su_debugfs_eeprom_fops);
+	debugfs_create_file("eeprom_raw", S_IRUSR, dfs, dev,
+			    &r92su_debugfs_eeprom_raw_fops);
+	debugfs_create_file("h2c_seq", S_IRUSR, dfs, dev,
+			    &r92su_debugfs_h2c_seq_fops);
+	debugfs_create_file("c2h_seq", S_IRUSR, dfs, dev,
+			    &r92su_debugfs_c2h_seq_fops);
+	debugfs_create_file("cpwm", S_IRUSR, dfs, dev,
+			    &r92su_debugfs_cpwm_fops);
+	debugfs_create_file("rpwm", S_IRUSR, dfs, dev,
+			    &r92su_debugfs_rpwm_fops);
+	debugfs_create_file("rx_queue_len", S_IRUSR, dfs, dev,
+			    &r92su_debugfs_rx_queue_len_fops);
+
+	/* Write-only files */
+	debugfs_create_file("hw_iowrite", S_IWUSR, dfs, dev,
+			    &r92su_debugfs_hw_iowrite_fops);
+
+	return dfs;
+}
+EXPORT_SYMBOL_GPL(rust_helper_debugfs_create);
+
+/**
+ * rust_helper_debugfs_remove - remove debugfs entries.
+ *
+ * @dfs: the debugfs directory pointer returned by rust_helper_debugfs_create
+ */
+void rust_helper_debugfs_remove(struct dentry *dfs)
+{
+	if (dfs)
+		debugfs_remove_recursive(dfs);
+}
+EXPORT_SYMBOL_GPL(rust_helper_debugfs_remove);
 

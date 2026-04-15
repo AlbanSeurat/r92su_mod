@@ -288,7 +288,7 @@ extern "C" fn scan_timeout_callback(dev_ptr: *mut c_void) {
     // Cast from *mut c_void to *mut R92suDevice.
     // SAFETY: dev_ptr was stored as R92suDevice* in schedule_scan_timeout.
     let dev: &mut R92suDevice = unsafe { &mut *(dev_ptr as *mut R92suDevice) };
-    pr_info!("r92su: scan timeout fired, forcing scan complete\n");
+    pr_debug!("r92su: scan timeout fired, forcing scan complete\n");
 
     // Mark scan as done and complete it.
     dev.scan_done = true;
@@ -296,7 +296,7 @@ extern "C" fn scan_timeout_callback(dev_ptr: *mut c_void) {
 }
 
 extern "C" fn scan_callback(wiphy: *mut c_void, request: *mut c_void) -> c_int {
-    pr_info!(
+    pr_debug!(
         "r92su: scan_callback entered (wiphy={:p} request={:p})\n",
         wiphy,
         request
@@ -338,13 +338,13 @@ extern "C" fn scan_callback(wiphy: *mut c_void, request: *mut c_void) -> c_int {
     // For now, do a broadcast scan (ssid = None).
     let ssid = None;
 
-    pr_info!("r92su: sending h2c_survey to firmware\n");
+    pr_debug!("r92su: sending h2c_survey to firmware\n");
 
     // Send the survey command to firmware.
     // SAFETY: dev is valid and h2c_survey writes H2C commands to USB.
     match cmd::h2c_survey(dev, ssid) {
         Ok(()) => {
-            pr_info!("r92su: h2c_survey sent, waiting for SurveyDone event\n");
+            pr_debug!("r92su: h2c_survey sent, waiting for SurveyDone event\n");
             // Schedule 5-second timeout to forcibly complete scan if firmware is silent.
             // Cast dev_ptr to *mut c_void as required by the C helper.
             // SAFETY: scan_timeout_callback is a valid extern "C" fn; dev_ptr is valid.
@@ -369,7 +369,7 @@ extern "C" fn scan_callback(wiphy: *mut c_void, request: *mut c_void) -> c_int {
 }
 
 extern "C" fn abort_scan_callback(wiphy: *mut c_void, _wdev: *mut c_void) {
-    pr_info!("r92su: abort scan callback invoked\n");
+    pr_debug!("r92su: abort scan callback invoked\n");
 
     // Recover the device pointer from the wiphy private area (see scan_callback).
     // SAFETY: same invariants as scan_callback.
@@ -397,7 +397,7 @@ extern "C" fn abort_scan_callback(wiphy: *mut c_void, _wdev: *mut c_void) {
 ///
 /// Called when firmware reports `SurveyDone` event.
 pub fn complete_scan(dev: &mut R92suDevice) {
-    pr_info!("r92su: complete_scan entered\n");
+    pr_debug!("r92su: complete_scan entered\n");
 
     // Cancel any pending scan timeout - we're completing now.
     // SAFETY: Safe to call even if no timeout was scheduled.
@@ -406,7 +406,7 @@ pub fn complete_scan(dev: &mut R92suDevice) {
     // SAFETY: Checked for null below.
     let request = unsafe { PENDING_SCAN_REQUEST };
     if request.is_null() {
-        pr_info!("r92su: complete_scan called but no pending request\n");
+        pr_debug!("r92su: complete_scan called but no pending request\n");
         return;
     }
 
@@ -421,7 +421,7 @@ pub fn complete_scan(dev: &mut R92suDevice) {
 
     // Process all BSS entries from firmware.
     let bss_count = dev.add_bss_pending.len();
-    pr_info!("r92su: reporting {} BSS entries to cfg80211\n", bss_count);
+    pr_debug!("r92su: reporting {} BSS entries to cfg80211\n", bss_count);
     for bss_data in dev.add_bss_pending.iter() {
         // Display the SSID for each BSS entry before reporting to cfg80211.
         // h2cc2h_bss layout: length(4) + bssid(6) + padding(2) + ssid_len(4) + ssid(32).
@@ -439,7 +439,7 @@ pub fn complete_scan(dev: &mut R92suDevice) {
             let ssid_len = ssid_len.min(MAX_SSID_LEN);
             let ssid_bytes = &bss_data[SSID_BYTES_OFFSET..SSID_BYTES_OFFSET + ssid_len];
             // Print as hex bytes; cfg80211/iw will decode the UTF-8/ASCII.
-            pr_info!(
+            pr_debug!(
                 "r92su: BSS SSID ({} bytes): {:02x?}\n",
                 ssid_len,
                 ssid_bytes
@@ -451,7 +451,7 @@ pub fn complete_scan(dev: &mut R92suDevice) {
     // Keep add_bss_pending intact so the connect callback can look up the BSS.
     // It is cleared at the start of the next scan (in scan_callback).
 
-    pr_info!(
+    pr_debug!(
         "r92su: calling cfg80211_scan_done (request={:p})\n",
         request
     );
@@ -464,7 +464,7 @@ pub fn complete_scan(dev: &mut R92suDevice) {
     }
 
     dev.scan_done = false;
-    pr_info!("r92su: scan completed\n");
+    pr_debug!("r92su: scan completed\n");
 }
 
 /// Inform cfg80211 about a discovered BSS.
@@ -598,7 +598,7 @@ fn inform_bss(wiphy: *mut c_void, bss_data: &[u8]) {
         1
     };
 
-    pr_info!(
+    pr_debug!(
         "r92su: BSS BSSID={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} SSID_len={} RSSI={} ch={} sec={} cap=0x{:04x} beacon={}\n",
         bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5],
         fixed_ssid_len, rssi, ch_num, security, capability, beacon_interval
@@ -607,8 +607,8 @@ fn inform_bss(wiphy: *mut c_void, bss_data: &[u8]) {
         let ssid_str =
             core::str::from_utf8(&bss_data[ssid_bytes_offset..ssid_bytes_offset + fixed_ssid_len]);
         match ssid_str {
-            Ok(s) => pr_info!("r92su:   SSID: {}\n", s),
-            Err(_) => pr_info!("r92su:   SSID: (non-UTF8, {} bytes)\n", fixed_ssid_len),
+            Ok(s) => pr_debug!("r92su:   SSID: {}\n", s),
+            Err(_) => pr_debug!("r92su:   SSID: (non-UTF8, {} bytes)\n", fixed_ssid_len),
         }
     }
 
@@ -675,5 +675,5 @@ pub fn init() {
         rust_helper_set_cfg80211_ops_abort_scan(Some(abort_scan_callback));
     }
 
-    pr_info!("r92su: scan subsystem initialized\n");
+    pr_debug!("r92su: scan subsystem initialized\n");
 }

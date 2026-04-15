@@ -225,7 +225,7 @@ fn c2h_fwdbg_event(payload: &[u8]) {
     if !payload.is_empty() {
         // Log up to 64 bytes of the firmware debug string.
         let len = payload.len().min(64);
-        pr_info!("r92su fwdbg: {} bytes\n", len);
+        pr_debug!("r92su fwdbg: {} bytes\n", len);
     }
 }
 
@@ -254,13 +254,13 @@ fn c2h_survey_event(dev: &mut R92suDevice, payload: &[u8], raw_len: u16) {
 }
 
 fn c2h_survey_done_event(dev: &mut R92suDevice) {
-    pr_info!("r92su: SurveyDone event received from firmware\n");
+    pr_debug!("r92su: SurveyDone event received from firmware\n");
     if !dev.is_open() {
-        pr_info!("r92su: SurveyDone ignored, device not open\n");
+        pr_debug!("r92su: SurveyDone ignored, device not open\n");
         return;
     }
     dev.scan_done = true;
-    pr_info!("r92su: survey done, invoking complete_scan\n");
+    pr_debug!("r92su: survey done, invoking complete_scan\n");
 
     // Complete the cfg80211 scan.
     scan::complete_scan(dev);
@@ -280,7 +280,7 @@ fn c2h_join_bss_event(dev: &mut R92suDevice, payload: &[u8], raw_len: u16) {
         return;
     }
     dev.connect_result = Some(v);
-    pr_info!("r92su: join BSS result stored ({} bytes)\n", copy_len);
+    pr_debug!("r92su: join BSS result stored ({} bytes)\n", copy_len);
 
     // Schedule process-context delivery to cfg80211.  cfg80211_connect_result
     // must not be called from softirq context, so we defer via a workqueue.
@@ -297,7 +297,7 @@ fn c2h_add_sta_event(dev: &mut R92suDevice, payload: &[u8]) {
         }
     };
     let aid = u32::from_le(ev.aid) as u8;
-    pr_info!(
+    pr_debug!(
         "r92su: C2H_ADD_STA mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} aid={}\n",
         ev.mac_addr[0],
         ev.mac_addr[1],
@@ -328,7 +328,7 @@ fn c2h_del_sta_event(dev: &mut R92suDevice, payload: &[u8]) {
         }
     };
 
-    pr_info!(
+    pr_debug!(
         "r92su: C2H_DEL_STA mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
         ev.mac_addr[0],
         ev.mac_addr[1],
@@ -423,7 +423,7 @@ pub fn r92su_c2h_event(dev: &mut R92suDevice, data: &[u8]) {
 
     // Sequence check — mirrors the C driver's sequence tracking.
     if dev.c2h_seq != hdr.cmd_seq {
-        pr_info!(
+        pr_debug!(
             "r92su: c2h out of sequence: expected {}, got {}\n",
             dev.c2h_seq,
             hdr.cmd_seq
@@ -435,7 +435,7 @@ pub fn r92su_c2h_event(dev: &mut R92suDevice, data: &[u8]) {
 
     let payload = &data[C2H_HDR_LEN..];
 
-    pr_info!("r92su: c2h event={:#x} len={}\n", hdr.event, hdr.len);
+    pr_debug!("r92su: c2h event={:#x} len={}\n", hdr.event, hdr.len);
 
     let event = match FwC2hEvent::from_u8(hdr.event) {
         Some(e) => e,
@@ -459,7 +459,7 @@ pub fn r92su_c2h_event(dev: &mut R92suDevice, data: &[u8]) {
         FwC2hEvent::AddBaReport => c2h_addba_report_event(dev, payload),
         _ => {
             // Silently ignore read-register echoes and other unhandled events.
-            pr_info!("r92su: unhandled c2h event {:?}\n", event);
+            pr_debug!("r92su: unhandled c2h event {:?}\n", event);
         }
     }
 }

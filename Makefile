@@ -1,5 +1,5 @@
 # KDIR points to your previously configured and compiled kernel source tree
-KDIR ?= /home/alkpone/driver/linux-rust
+KDIR ?= /usr/src/linux-headers-7.0.0-14-generic
 
 # Module object file name
 obj-m := rtl8192su.o
@@ -11,9 +11,9 @@ HOSTCFLAGS_MODULE   =
 CLANG_FLAGS_MODULE  =
 
 all:
-	make LLVM=1 -C $(KDIR) M=$(CURDIR) modules
+	make -C $(KDIR) M=$(CURDIR) modules
 
 clean:
-	make LLVM=1 -C $(KDIR) M=$(CURDIR) clean
+	make -C $(KDIR) M=$(CURDIR) clean
 
 .PHONY: all clean

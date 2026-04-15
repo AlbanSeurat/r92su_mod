@@ -54,9 +54,9 @@ extern "C" fn set_power_mgmt_callback(
     dev.ps_enabled = enabled;
 
     if enabled {
-        pr_info!("r92su: power save enabled (timeout=driver choice)\n");
+        pr_debug!("r92su: power save enabled (timeout=driver choice)\n");
     } else {
-        pr_info!("r92su: power save disabled\n");
+        pr_debug!("r92su: power save disabled\n");
     }
 
     0
@@ -151,5 +151,5 @@ pub fn init() {
     unsafe {
         rust_helper_set_cfg80211_ops_set_power_mgmt(Some(set_power_mgmt_callback));
     }
-    pr_info!("r92su: power management initialized\n");
+    pr_debug!("r92su: power management initialized\n");
 }

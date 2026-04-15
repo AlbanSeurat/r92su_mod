@@ -55,7 +55,7 @@ fn register_wiphy(dev: &mut R92suDevice) -> Result<()> {
         R92suError::Io("wiphy_register failed")
     })?;
     dev.wiphy_registered = true;
-    pr_info!("r92su: wiphy registered\n");
+    pr_debug!("r92su: wiphy registered\n");
     Ok(())
 }
 
@@ -78,7 +78,7 @@ fn register_netdev(dev: &mut R92suDevice) -> Result<()> {
         pr_err!("r92su: register_netdev failed\n");
         R92suError::Io("register_netdev failed")
     })?;
-    pr_info!("r92su: net_device registered\n");
+    pr_debug!("r92su: net_device registered\n");
     Ok(())
 }
 
@@ -136,10 +136,10 @@ fn unregister_netdev(dev: &mut R92suDevice) {
     // then drop the WirelessDev (which calls kfree on the wireless_dev).
     // The correct order is guaranteed here: netdev is taken before wdev.
     if dev.netdev.take().is_some() {
-        pr_info!("r92su: net_device unregistered\n");
+        pr_debug!("r92su: net_device unregistered\n");
     }
     if dev.wdev.take().is_some() {
-        pr_info!("r92su: wireless_dev freed\n");
+        pr_debug!("r92su: wireless_dev freed\n");
     }
 }
 
@@ -153,7 +153,7 @@ fn unregister_wiphy(dev: &mut R92suDevice) {
             wiphy.unregister();
         }
         dev.wiphy_registered = false;
-        pr_info!("r92su: wiphy unregistered\n");
+        pr_debug!("r92su: wiphy unregistered\n");
     }
 }
 
@@ -185,7 +185,7 @@ pub fn r92su_register(dev: &mut R92suDevice) -> Result<()> {
             pr_warn!("r92su_register: could not retrieve netdev pointer\n");
         } else {
             dev.netdev_ptr = ndev;
-            pr_info!("r92su_register: netdev_ptr cached ({:p})\n", ndev);
+            pr_debug!("r92su_register: netdev_ptr cached ({:p})\n", ndev);
         }
     }
 
@@ -204,7 +204,7 @@ pub fn r92su_register(dev: &mut R92suDevice) -> Result<()> {
     //        rev_to_string[r92su->chip_rev],
     //        rf_to_string(r92su->rf_type),
     //        wiphy_name(r92su->wdev.wiphy));
-    pr_info!(
+    pr_debug!(
         "r92su: Realtek RTL81XX {:04x}:{:04x} rev {}, rf:{} is registered\n",
         dev.vendor_id,
         dev.product_id,
@@ -248,5 +248,5 @@ pub fn r92su_unregister(dev: &mut R92suDevice) {
     //
     // These involve subsystems (RCU, workqueue, firmware, RX tasklet) that are
     // not yet modelled in the Rust driver; log their completion as stubs.
-    pr_info!("r92su_unregister: RCU barrier, workqueue, firmware, RX teardown complete\n");
+    pr_debug!("r92su_unregister: RCU barrier, workqueue, firmware, RX teardown complete\n");
 }

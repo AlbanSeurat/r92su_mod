@@ -117,7 +117,7 @@ extern "C" fn get_station_callback(
 
     sta_set_sinfo(sinfo, sta);
 
-    pr_info!(
+    pr_debug!(
         "r92su: get_station: station {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} rssi={}\n",
         peer[0],
         peer[1],
@@ -163,7 +163,7 @@ extern "C" fn dump_station_callback(
         ptr::copy_nonoverlapping(sta.mac_addr.as_ptr(), mac, ETH_ALEN);
     }
 
-    pr_info!(
+    pr_debug!(
         "r92su: dump_station: idx={} station {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
         i,
         sta.mac_addr[0],
@@ -218,7 +218,7 @@ extern "C" fn change_station_callback(
     if (sta_flags_mask & authorize_bit) != 0 && (sta_flags_set & authorize_bit) != 0 {
         // wpa_supplicant is marking the station as authorized (4-way handshake complete).
         // For RTL8192SU in STA mode, we just acknowledge this.
-        pr_info!(
+        pr_debug!(
             "r92su: change_station: station {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} authorized\n",
             peer[0],
             peer[1],
@@ -242,5 +242,5 @@ pub fn init() {
         rust_helper_set_cfg80211_ops_dump_station(Some(dump_station_callback));
         rust_helper_set_cfg80211_ops_change_station(Some(change_station_callback));
     }
-    pr_info!("r92su: station info operations initialized\n");
+    pr_debug!("r92su: station info operations initialized\n");
 }

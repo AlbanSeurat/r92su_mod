@@ -63,7 +63,7 @@ extern "C" fn tdls_mgmt_callback(
     _buf: *const u8,
     _len: usize,
 ) -> c_int {
-    pr_info!(
+    pr_debug!(
         "r92su: tdls_mgmt: peer={:?}, action_code={}\n",
         peer,
         action_code
@@ -74,11 +74,11 @@ extern "C" fn tdls_mgmt_callback(
     }
 
     match action_code {
-        0 => pr_info!("r92su: TDLS discovery request\n"),
-        1 => pr_info!("r92su: TDLS setup request\n"),
-        2 => pr_info!("r92su: TDLS setup response\n"),
-        3 => pr_info!("r92su: TDLS teardown\n"),
-        _ => pr_info!("r92su: TDLS unknown action {}\n", action_code),
+        0 => pr_debug!("r92su: TDLS discovery request\n"),
+        1 => pr_debug!("r92su: TDLS setup request\n"),
+        2 => pr_debug!("r92su: TDLS setup response\n"),
+        3 => pr_debug!("r92su: TDLS teardown\n"),
+        _ => pr_debug!("r92su: TDLS unknown action {}\n", action_code),
     }
 
     0
@@ -90,7 +90,7 @@ extern "C" fn tdls_oper_callback(
     peer: *const u8,
     oper: c_int,
 ) -> c_int {
-    pr_info!("r92su: tdls_oper: peer={:?}, oper={}\n", peer, oper);
+    pr_debug!("r92su: tdls_oper: peer={:?}, oper={}\n", peer, oper);
 
     if peer.is_null() {
         return -1;
@@ -98,29 +98,29 @@ extern "C" fn tdls_oper_callback(
 
     match oper {
         NL80211_TDLS_DISCOVERY_REQ => {
-            pr_info!("r92su: TDLS discovery request from userspace\n");
+            pr_debug!("r92su: TDLS discovery request from userspace\n");
             0
         }
         NL80211_TDLS_SETUP => {
-            pr_info!("r92su: TDLS setup request from userspace\n");
+            pr_debug!("r92su: TDLS setup request from userspace\n");
             unsafe {
                 rust_helper_cfg80211_tdls_oper_request(ndev, peer, NL80211_TDLS_SETUP, 0, 0);
             }
             0
         }
         NL80211_TDLS_TEARDOWN => {
-            pr_info!("r92su: TDLS teardown request from userspace\n");
+            pr_debug!("r92su: TDLS teardown request from userspace\n");
             unsafe {
                 rust_helper_cfg80211_tdls_oper_request(ndev, peer, NL80211_TDLS_TEARDOWN, 0, 0);
             }
             0
         }
         NL80211_TDLS_ENABLE_LINK => {
-            pr_info!("r92su: TDLS enable link\n");
+            pr_debug!("r92su: TDLS enable link\n");
             0
         }
         NL80211_TDLS_DISABLE_LINK => {
-            pr_info!("r92su: TDLS disable link\n");
+            pr_debug!("r92su: TDLS disable link\n");
             0
         }
         _ => {
@@ -135,5 +135,5 @@ pub fn init() {
         rust_helper_set_cfg80211_ops_tdls_mgmt(Some(tdls_mgmt_callback));
         rust_helper_set_cfg80211_ops_tdls_oper(Some(tdls_oper_callback));
     }
-    pr_info!("r92su: tdls cfg80211 operations initialized\n");
+    pr_debug!("r92su: tdls cfg80211 operations initialized\n");
 }

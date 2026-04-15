@@ -672,7 +672,7 @@ fn rx_deliver(dev: &mut R92suDevice, frame: KVec<u8>) {
 
     if !dev.netdev_ptr.is_null() && dev.is_open() {
         let formatted = format_80211_frame(&frame);
-        pr_info!(
+        pr_debug!(
             "r92su: rx: {} bytes: {}\n{}\n",
             frame.len(),
             formatted,
@@ -697,7 +697,7 @@ fn rx_deliver(dev: &mut R92suDevice, frame: KVec<u8>) {
             dev.rx_dropped += 1;
         }
         let formatted = format_80211_frame(&dev.pending_rx.last().unwrap().as_slice());
-        pr_info!(
+        pr_debug!(
             "r92su: rx buffering {} bytes (netdev={:p}, is_open={}): {}\n{}\n",
             frame_len,
             dev.netdev_ptr,
@@ -784,7 +784,7 @@ fn process_data_frame(dev: &mut R92suDevice, desc: &RxDesc, raw_frame: &[u8]) {
     } else {
         0
     };
-    pr_info!(
+    pr_debug!(
         "r92su: RX frame arrived: len={}, fc={:04x}, rate={}, ht={}, bw_40={}\n",
         raw_frame.len(),
         fc,
@@ -793,7 +793,7 @@ fn process_data_frame(dev: &mut R92suDevice, desc: &RxDesc, raw_frame: &[u8]) {
         desc.bw_40()
     );
     if raw_frame.len() >= 24 {
-        pr_info!(
+        pr_debug!(
             "r92su:   addr1={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
             raw_frame[4],
             raw_frame[5],
@@ -802,7 +802,7 @@ fn process_data_frame(dev: &mut R92suDevice, desc: &RxDesc, raw_frame: &[u8]) {
             raw_frame[8],
             raw_frame[9]
         );
-        pr_info!(
+        pr_debug!(
             "r92su:   addr2={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
             raw_frame[10],
             raw_frame[11],
@@ -811,7 +811,7 @@ fn process_data_frame(dev: &mut R92suDevice, desc: &RxDesc, raw_frame: &[u8]) {
             raw_frame[14],
             raw_frame[15]
         );
-        pr_info!(
+        pr_debug!(
             "r92su:   addr3={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
             raw_frame[16],
             raw_frame[17],
@@ -826,7 +826,7 @@ fn process_data_frame(dev: &mut R92suDevice, desc: &RxDesc, raw_frame: &[u8]) {
     let frame_slice = match rx_hw_header_check(desc, raw_frame, &mut meta) {
         Ok(f) => f,
         Err(_) => {
-            pr_info!("r92su: process_data_frame dropped at header check\n");
+            pr_debug!("r92su: process_data_frame dropped at header check\n");
             dev.rx_dropped += 1;
             return;
         }
@@ -835,7 +835,7 @@ fn process_data_frame(dev: &mut R92suDevice, desc: &RxDesc, raw_frame: &[u8]) {
     // ── Clone frame into owned buffer ─────────────────────────────────────────
     let mut frame: KVec<u8> = KVec::new();
     if frame.extend_from_slice(frame_slice, GFP_ATOMIC).is_err() {
-        pr_info!("r92su: process_data_frame dropped at alloc\n");
+        pr_debug!("r92su: process_data_frame dropped at alloc\n");
         dev.rx_dropped += 1;
         return;
     }
@@ -866,7 +866,7 @@ fn process_data_frame(dev: &mut R92suDevice, desc: &RxDesc, raw_frame: &[u8]) {
     // ── Deduplication ────────────────────────────────────────────────────────
     match rx_deduplicate(dev, &frame, &meta) {
         RxControl::Drop => {
-            pr_info!("r92su: process_data_frame dropped at dedup\n");
+            pr_debug!("r92su: process_data_frame dropped at dedup\n");
             dev.rx_dropped += 1;
             return;
         }
@@ -879,7 +879,7 @@ fn process_data_frame(dev: &mut R92suDevice, desc: &RxDesc, raw_frame: &[u8]) {
     // ── Management frame handling ────────────────────────────────────────────
     match rx_handle_mgmt(&frame) {
         RxControl::Queue | RxControl::Drop => {
-            pr_info!("r92su: process_data_frame mgmt dropped\n");
+            pr_debug!("r92su: process_data_frame mgmt dropped\n");
             return;
         }
         RxControl::Continue => {}
@@ -890,7 +890,7 @@ fn process_data_frame(dev: &mut R92suDevice, desc: &RxDesc, raw_frame: &[u8]) {
     let (ctrl, frame_opt) = rx_reorder_ampdu(dev, frame, &meta, &mut reordered);
     match ctrl {
         RxControl::Drop => {
-            pr_info!("r92su: process_data_frame dropped at ampdu\n");
+            pr_debug!("r92su: process_data_frame dropped at ampdu\n");
             dev.rx_dropped += 1;
             return;
         }
@@ -909,7 +909,7 @@ fn process_data_frame(dev: &mut R92suDevice, desc: &RxDesc, raw_frame: &[u8]) {
         for released in reordered.drain_all() {
             deliver_one(dev, released, &meta);
         }
-        pr_info!("r92su: process_data_frame passing frame to deliver_one\n");
+        pr_debug!("r92su: process_data_frame passing frame to deliver_one\n");
         deliver_one(dev, f, &meta);
     }
 }
@@ -956,7 +956,7 @@ pub fn r92su_rx(dev: &mut R92suDevice, buf: &[u8]) {
         None => return,
     };
     let pkt_cnt = first_desc.pktcnt().max(1);
-    pr_info!(
+    pr_debug!(
         "r92su: USB RX buffer: {} bytes, {} packets\n",
         buf.len(),
         pkt_cnt
@@ -977,7 +977,7 @@ pub fn r92su_rx(dev: &mut R92suDevice, buf: &[u8]) {
         let hdr_len = RX_DESC_SIZE + drvinfo;
 
         if pos + hdr_len + shift + pkt_len > max_len {
-            pr_info!("r92su rx: clipped frame at pos={}\n", pos);
+            pr_debug!("r92su rx: clipped frame at pos={}\n", pos);
             break;
         }
 

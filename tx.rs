@@ -438,7 +438,7 @@ fn tx_find_sta(dev: &R92suDevice, frame: &[u8], meta: &mut TxMeta) -> bool {
         // No station available — the BSS station must be added before we can TX.
         // This mirrors the C driver's r92su_tx_find_sta which returns TX_DROP
         // when bss_priv->sta is NULL.
-        pr_info!("r92su tx: no station available for TX\n");
+        pr_debug!("r92su tx: no station available for TX\n");
         false
     }
 }
@@ -616,7 +616,7 @@ pub fn r92su_tx(dev: &mut R92suDevice, frame: &[u8], mac_id: usize) -> Result<()
 
     // Log packet being transmitted using etherparse-style formatting.
     let formatted = format_80211_frame(&frame_buf);
-    pr_info!(
+    pr_debug!(
         "r92su tx: {} queued (mac_id={}): {}\n{}",
         pkt_size,
         effective_mac_id,
