@@ -12,7 +12,7 @@ use core::ptr;
 
 use kernel::prelude::*;
 
-use crate::cfg80211::{self, wiphy_priv};
+use crate::cfg80211::wiphy_priv;
 use crate::r92u::{R92suDevice, ETH_ALEN};
 
 extern "C" {

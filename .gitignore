@@ -1,5 +1,3 @@
 target
-wpa_supplicant_home.conf
-wpa_supplicant.conf
-wpa_supplicant_kleis.conf
+wpa_supplicant*.conf
 .claude

@@ -307,6 +307,18 @@ pub struct H2cSetPowerMode {
     pub bcn_pass_time: u8,
 }
 
+/// Station power state command (`H2C_SET_STA_PWR_STATE_CMD`).
+///
+/// Mirrors `struct h2c_sta_psm` from `h2cc2h.h`.  Used to inform the firmware
+/// when the associated station enters or leaves power save mode, so it can
+/// respond to PS-Poll frames from the AP.
+#[repr(C, packed)]
+pub struct H2cStaPsm {
+    pub aid: u8,
+    pub status: u8,
+    pub addr: [u8; 6],
+}
+
 // ---------------------------------------------------------------------------
 // BSS descriptor for connect / create-BSS commands (mirrors h2cc2h_bss)
 // ---------------------------------------------------------------------------
@@ -757,12 +769,38 @@ pub fn r92su_set_power(dev: &mut R92suDevice, on: bool) -> Result<()> {
     if on {
         dev.rpwm_tog ^= PS_TOGGLE_BIT;
         let rpwm = PS_STATE_S4 | dev.rpwm_tog;
+        dev.rpwm = rpwm;
         unsafe { hw_write8(dev.udev, REG_USB_HRPWM, rpwm) };
         h2c_set_power_mode(dev, PS_MODE_ACTIVE, 0)
     } else {
         dev.rpwm_tog ^= PS_TOGGLE_BIT;
         let rpwm = PS_STATE_S2 | dev.rpwm_tog;
+        dev.rpwm = rpwm;
         unsafe { hw_write8(dev.udev, REG_USB_HRPWM, rpwm) };
         h2c_set_power_mode(dev, PS_MODE_RADIO_OFF, 1)
     }
+}
+
+/// Set station power state.
+///
+/// Informs the firmware of the associated station's power save state so it can
+/// respond to PS-Poll frames from the AP.  This is required for power save to work
+/// correctly - without this, the firmware doesn't know when to send buffered frames.
+///
+/// - `aid`: Association ID (0-2007)
+/// - `ps_state`: 0 = active, 1 = power save
+/// - `mac_addr`: MAC address of the associated station (usually the AP for STA mode)
+pub fn h2c_set_sta_pwr_state(
+    dev: &mut R92suDevice,
+    aid: u8,
+    ps_state: u8,
+    mac_addr: &[u8; 6],
+) -> Result<()> {
+    let args = H2cStaPsm {
+        aid,
+        status: ps_state,
+        addr: *mac_addr,
+    };
+    // SAFETY: H2cStaPsm is #[repr(C, packed)] with no pointer fields.
+    h2c_copy(dev, FwH2cCmd::SetStaPwrState, unsafe { as_bytes(&args) })
 }

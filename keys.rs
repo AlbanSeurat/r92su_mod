@@ -143,7 +143,8 @@ extern "C" fn add_key_callback(
     };
 
     // ── Allocate R92suKey ─────────────────────────────────────────────────────
-    let new_key = match sta::key_alloc(cipher, key_index, &peer, pairwise, &key_buf[..key_len]) {
+    let mut new_key = match sta::key_alloc(cipher, key_index, &peer, pairwise, &key_buf[..key_len])
+    {
         Ok(k) => k,
         Err(e) => {
             pr_err!("r92su: add_key: key_alloc failed: {:?}\n", e);
@@ -171,8 +172,13 @@ extern "C" fn add_key_callback(
             );
             return -22; // -EINVAL
         }
+        // Key was successfully uploaded to firmware hardware.
+        new_key.uploaded = true;
         for sta in dev.sta_list.iter_mut() {
             if sta.mac_addr == peer {
+                // Mark station as requiring encryption so tx_select_key applies
+                // the key.  Mirrors C driver: sta->enc_sta = (privacy != 0).
+                sta.enc_sta = true;
                 sta.sta_key = Some(new_key);
                 break;
             }
@@ -191,6 +197,8 @@ extern "C" fn add_key_callback(
                 return -5; // -EIO
             }
         }
+        // Key was successfully uploaded to firmware hardware.
+        new_key.uploaded = true;
         // Replace any existing group key in this slot.
         dev.group_keys[idx] = Some(new_key);
     }
@@ -260,10 +268,11 @@ extern "C" fn del_key_callback(
             }
         }
 
-        // Now clear the key from the station entry.
+        // Clear the key and reset encryption state for this station.
         for sta in dev.sta_list.iter_mut() {
             if sta.mac_addr == peer {
                 sta.sta_key = None;
+                sta.enc_sta = false;
                 break;
             }
         }

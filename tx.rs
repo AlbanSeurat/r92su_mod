@@ -23,7 +23,8 @@
 use kernel::prelude::*;
 
 use crate::cmd::EncAlg; //
-use crate::r92u::{usb_tx_cmd, R92suDevice, Result, State}; //
+use crate::packet_formatter::{format_80211_frame, hex_dump};
+use crate::r92u::{usb_tx_cmd, R92suDevice, Result};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -613,18 +614,14 @@ pub fn r92su_tx(dev: &mut R92suDevice, frame: &[u8], mac_id: usize) -> Result<()
     dev.tx_packets += 1;
     dev.tx_bytes += pkt_size as u64;
 
+    // Log packet being transmitted using etherparse-style formatting.
+    let formatted = format_80211_frame(&frame_buf);
     pr_info!(
-        "r92su tx: {} bytes queued (mac_id={})\n",
+        "r92su tx: {} queued (mac_id={}): {}\n{}",
         pkt_size,
-        effective_mac_id
-    );
-
-    // Log packet being sent into the network.
-    let log_len = core::cmp::min(64, frame_buf.len());
-    pr_info!(
-        "r92su tx: sending {} bytes: {:02x?}\n",
-        log_len,
-        &frame_buf[..log_len]
+        effective_mac_id,
+        formatted,
+        hex_dump(&frame_buf)
     );
     Ok(())
 }

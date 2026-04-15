@@ -18,7 +18,7 @@
 //! ```
 //!
 //! The delivery step (`rx_deliver`) converts the 802.11 frame to 802.3 via
-//! `rust_helper_rx_deliver_80211()` and hands it to `netif_rx()`.  If the
+//! `rust_helper_rx_deliver_80211()` and hands it to `netif_receive_skb()`.  If the
 //! netdev pointer or device state is not yet ready the frame is queued in
 //! `dev.pending_rx` as a fallback.
 
@@ -27,14 +27,14 @@ use core::ffi::c_void;
 use kernel::prelude::*;
 
 use crate::event; //
-use crate::r92u::{R92suDevice, State}; //
-use crate::sta; //
+use crate::packet_formatter::{format_80211_frame, hex_dump};
+use crate::r92u::R92suDevice; //
 
 extern "C" {
     /// Deliver a 802.11 data frame to the network stack.
     ///
     /// Converts the 802.11 frame to 802.3 via `ieee80211_data_to_8023()` and
-    /// then calls `netif_rx()`.  Returns 0 on success, negative errno on error.
+    /// then calls `netif_receive_skb()`.  Returns 0 on success, negative errno on error.
     fn rust_helper_rx_deliver_80211(ndev: *mut c_void, data: *const u8, len: usize) -> i32;
 }
 
@@ -193,10 +193,9 @@ fn has_protected(fc: u16) -> bool {
     (fc & (1 << 14)) != 0
 }
 
-/// True if the frame is a data-type frame with actual payload (not null).
+/// True if the frame is a data-type frame.
 fn is_data_present(fc: u16) -> bool {
-    // type=data AND subtype bit-2 clear (bit-2 of subtype = null data flag)
-    fc_type(fc) == 2 && ((fc >> 6) & 1) == 0
+    fc_type(fc) == 2
 }
 
 /// True if the data frame carries a QoS control field.
@@ -548,15 +547,15 @@ fn reorder_release_slot(tid: &mut crate::sta::RxTid, index: usize, out: &mut KVe
 /// 12-bit sequence number arithmetic (`IEEE80211_SEQ_MASK = 0x0fff`).
 
 fn ieee80211_sn_less(a: u16, b: u16) -> bool {
-    ((b - a) & 0x0fff) < 0x0800
+    (b.wrapping_sub(a) & 0x0fff) < 0x0800
 }
 
 fn ieee80211_sn_add(a: u16, b: u16) -> u16 {
-    (a + b) & 0x0fff
+    a.wrapping_add(b) & 0x0fff
 }
 
 fn ieee80211_sn_sub(a: u16, b: u16) -> u16 {
-    (a - b) & 0x0fff
+    a.wrapping_sub(b) & 0x0fff
 }
 
 fn ieee80211_sn_inc(a: u16) -> u16 {
@@ -662,7 +661,7 @@ fn rx_defrag(
 /// Deliver a processed 802.11 frame to the network stack.
 ///
 /// If a cached `netdev_ptr` is available the frame is converted to 802.3
-/// via `rust_helper_rx_deliver_80211()` and passed to `netif_rx()`.
+/// via `rust_helper_rx_deliver_80211()` and passed to `netif_receive_skb()`.
 /// If no netdev is available yet the frame is queued in `pending_rx` for
 /// later delivery (e.g. during a scan before the device is fully open).
 ///
@@ -672,7 +671,13 @@ fn rx_deliver(dev: &mut R92suDevice, frame: KVec<u8>) {
     dev.rx_packets += 1;
 
     if !dev.netdev_ptr.is_null() && dev.is_open() {
-        pr_info!("r92su: rx_deliver delivering {} bytes\n", frame.len());
+        let formatted = format_80211_frame(&frame);
+        pr_info!(
+            "r92su: rx: {} bytes: {}\n{}\n",
+            frame.len(),
+            formatted,
+            hex_dump(&frame)
+        );
         // SAFETY: netdev_ptr was set from rust_helper_get_netdev_ptr() after
         // register_netdev() and is valid for the lifetime of the interface.
         // frame.as_ptr() / frame.len() are valid for the duration of this call.
@@ -687,16 +692,19 @@ fn rx_deliver(dev: &mut R92suDevice, frame: KVec<u8>) {
             dev.rx_dropped += 1;
         }
     } else {
-        // Device not yet open or no netdev — buffer the frame.
-        pr_info!(
-            "r92su: rx_deliver buffering {} bytes (netdev={:p}, is_open={})\n",
-            frame.len(),
-            dev.netdev_ptr,
-            dev.is_open()
-        );
+        let frame_len = frame.len();
         if dev.pending_rx.push(frame, GFP_ATOMIC).is_err() {
             dev.rx_dropped += 1;
         }
+        let formatted = format_80211_frame(&dev.pending_rx.last().unwrap().as_slice());
+        pr_info!(
+            "r92su: rx buffering {} bytes (netdev={:p}, is_open={}): {}\n{}\n",
+            frame_len,
+            dev.netdev_ptr,
+            dev.is_open(),
+            formatted,
+            hex_dump(&dev.pending_rx.last().unwrap().as_slice())
+        );
     }
 }
 
@@ -719,6 +727,49 @@ pub fn rx_flush_pending(dev: &mut R92suDevice) {
             dev.rx_dropped += 1;
         }
     }
+}
+
+// ── IV header stripping ───────────────────────────────────────────────────────
+
+/// Strip the encryption IV header from a hardware-decrypted 802.11 frame.
+///
+/// After hardware decryption the ciphertext IV header (CCMP/TKIP: 8 bytes,
+/// WEP: 4 bytes) is still present immediately after the 802.11 MAC header,
+/// but the trailing MIC/ICV has already been consumed by the hardware.
+/// `ieee80211_data_to_8023()` expects to find the LLC/SNAP header right after
+/// the MAC header, so we must excise the IV bytes and clear the Protected bit
+/// before delivery.
+///
+/// The ExtIV bit (bit 5 of the IV key-ID byte, located at `hdrlen + 3`)
+/// distinguishes CCMP/TKIP (8-byte IV, ExtIV = 1) from WEP (4-byte IV,
+/// ExtIV = 0).
+fn strip_iv_header(frame: &[u8], hdrlen: usize) -> Option<KVec<u8>> {
+    const CCMP_TKIP_IV_LEN: usize = 8;
+    const WEP_IV_LEN: usize = 4;
+
+    if frame.len() < hdrlen + 4 {
+        return None;
+    }
+
+    // Byte at hdrlen+3 is the key-ID / ExtIV byte.
+    let ext_iv = (frame[hdrlen + 3] & 0x20) != 0;
+    let iv_len = if ext_iv { CCMP_TKIP_IV_LEN } else { WEP_IV_LEN };
+
+    if frame.len() < hdrlen + iv_len {
+        return None;
+    }
+
+    let mut out: KVec<u8> = KVec::new();
+    // MAC header (unchanged, except for the Protected bit cleared below).
+    out.extend_from_slice(&frame[..hdrlen], GFP_ATOMIC).ok()?;
+    // Skip the IV header; copy payload (LLC/SNAP onwards) directly.
+    out.extend_from_slice(&frame[hdrlen + iv_len..], GFP_ATOMIC).ok()?;
+
+    // Clear Protected/WEP bit (bit 14 of the LE FC word = bit 6 of byte 1).
+    // SAFETY: out is at least hdrlen bytes long and hdrlen >= 2.
+    out[1] &= !(1u8 << 6);
+
+    Some(out)
 }
 
 // ── Data frame processing ─────────────────────────────────────────────────────
@@ -787,6 +838,26 @@ fn process_data_frame(dev: &mut R92suDevice, desc: &RxDesc, raw_frame: &[u8]) {
         pr_info!("r92su: process_data_frame dropped at alloc\n");
         dev.rx_dropped += 1;
         return;
+    }
+
+    // ── Strip hardware-decrypted IV header ────────────────────────────────────
+    // When the Protected bit is set but swdec() is false the chip already
+    // decrypted the payload and only the IV header (CCMP/TKIP 8 B, WEP 4 B)
+    // remains in-band.  ieee80211_data_to_8023() expects LLC/SNAP immediately
+    // after the 802.11 MAC header, so we excise the IV and clear Protected.
+    if meta.has_protect && !desc.swdec() {
+        let fc = u16::from_le_bytes([frame[0], frame[1]]);
+        let hdrlen = ieee80211_hdrlen(fc);
+        match strip_iv_header(&frame, hdrlen) {
+            Some(stripped) => {
+                frame = stripped;
+            }
+            None => {
+                pr_warn!("r92su: process_data_frame: IV strip failed (frame too short)\n");
+                dev.rx_dropped += 1;
+                return;
+            }
+        }
     }
 
     // ── Station lookup ────────────────────────────────────────────────────────

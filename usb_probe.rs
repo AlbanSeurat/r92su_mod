@@ -11,11 +11,12 @@ use crate::cfg80211_misc;
 use crate::connect;
 use crate::keys;
 use crate::mgmt_frame;
+use crate::power_mgmt;
 use crate::r92u::{r92su_usb_init, EndpointDirection, EndpointType, R92suDevice, UsbEndpoint};
 use crate::r92u_alloc::r92su_alloc;
 use crate::r92u_open;
 use crate::scan;
-use crate::sta;
+
 use crate::station_info;
 use crate::tdls;
 use crate::usb_register::r92su_register;
@@ -160,6 +161,9 @@ pub fn r92su_usb_probe(
 
     // Initialise TDLS callbacks.
     tdls::init();
+
+    // Initialise power management callback.
+    power_mgmt::init();
 
     Ok(dev)
 }

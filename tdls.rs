@@ -12,9 +12,6 @@
 use core::ffi::c_void;
 use kernel::prelude::*;
 
-use crate::cfg80211::wiphy_priv;
-use crate::r92u::R92suDevice;
-
 extern "C" {
     fn rust_helper_set_cfg80211_ops_tdls_mgmt(
         fn_ptr: Option<

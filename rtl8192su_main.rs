@@ -16,6 +16,8 @@ mod fw;
 mod keys;
 mod mgmt_frame;
 mod netdev;
+mod packet_formatter;
+mod power_mgmt;
 mod r92u;
 mod r92u_alloc;
 mod r92u_open;

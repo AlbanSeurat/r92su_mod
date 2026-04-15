@@ -203,6 +203,11 @@ extern "C" {
         fn_ptr: Option<extern "C" fn(*mut c_void, *mut c_void, *const u8, c_int) -> c_int>,
     );
 
+    /// `rust_helper_set_cfg80211_ops_set_power_mgmt` — set the .set_power_mgmt callback.
+    fn rust_helper_set_cfg80211_ops_set_power_mgmt(
+        fn_ptr: Option<extern "C" fn(*mut c_void, *mut c_void, bool, c_int) -> c_int>,
+    );
+
     /// `rust_helper_cfg80211_tdls_oper_request` — request userspace to perform TDLS operation.
     fn rust_helper_cfg80211_tdls_oper_request(
         ndev: *mut c_void,

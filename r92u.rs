@@ -754,6 +754,9 @@ pub struct R92suDevice {
     /// RPWM toggle bit — used when writing to REG_USB_HRPWM to prevent firmware
     /// from ignoring repeated same-value writes (mirrors `r92su->rpwm_tog`).
     pub rpwm_tog: u8,
+    /// Last written RPWM (power management command) value.
+    /// Mirrors `r92su->rpwm` in the C driver.
+    pub rpwm: u8,
 
     /// Raw BSS blobs accumulated during a site survey.
     ///
@@ -823,6 +826,14 @@ pub struct R92suDevice {
     /// Set by `r92su_register` after `register_netdev` succeeds.  Used by the
     /// RX delivery path to call `netif_rx` without a wiphy lookup.
     pub netdev_ptr: *mut core::ffi::c_void,
+
+    // ── Power save state ─────────────────────────────────────────────────────────
+    /// Power save mode enabled by userspace (via `set_power_mgmt`).
+    pub ps_enabled: bool,
+    /// Dynamic power save timeout (in ms, -1 means driver chooses).
+    pub ps_timeout: i32,
+    /// Association ID received from the AP during association.
+    pub assoc_id: u16,
 }
 
 impl R92suDevice {
@@ -867,6 +878,7 @@ impl R92suDevice {
             cpwm: 0,
             cpwm_tog: 0,
             rpwm_tog: 0,
+            rpwm: 0,
             add_bss_pending: KVec::new(),
             connect_result: None,
             pending_rx: KVec::new(),
@@ -888,6 +900,9 @@ impl R92suDevice {
             connect_ssid: [0u8; 32],
             connect_ssid_len: 0,
             netdev_ptr: core::ptr::null_mut(),
+            ps_enabled: false,
+            ps_timeout: -1,
+            assoc_id: 0,
         }
     }
 }

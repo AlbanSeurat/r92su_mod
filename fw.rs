@@ -5,7 +5,7 @@
 
 use kernel::prelude::*;
 
-use crate::r92u::{hw_read8, hw_write8, mdelay, udelay, R92suDevice, Result};
+use crate::r92u::{hw_read8, hw_write8, R92suDevice, Result};
 
 use crate::r92u::R92suError;
 

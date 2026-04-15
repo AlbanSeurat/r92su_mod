@@ -24,6 +24,7 @@ use kernel::prelude::*;
 
 use crate::cfg80211::wiphy_priv;
 use crate::cmd::{self, H2cc2hBss};
+use crate::power_mgmt;
 use crate::r92u::{R92suDevice, State};
 
 // ── C helpers ─────────────────────────────────────────────────────────────────
@@ -491,6 +492,9 @@ extern "C" fn join_result_process(dev_ptr: *mut c_void) {
             ]) as usize,
             _ => 0,
         };
+        dev.assoc_id = aid as u16;
+        power_mgmt::set_assoc_id(dev, aid as u16);
+
         if let Err(e) = dev.sta_alloc(&bssid, 0, aid) {
             pr_warn!("r92su: join_result: could not alloc AP station: {:?}\n", e);
         }

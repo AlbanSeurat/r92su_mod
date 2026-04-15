@@ -6,7 +6,7 @@
 //!
 //! Mirrors the corresponding functions in the C reference driver.
 
-use core::ffi::{c_int, c_uint, c_void};
+use core::ffi::{c_int, c_void};
 use kernel::prelude::*;
 
 use crate::cfg80211::wiphy_priv;

@@ -139,6 +139,7 @@ struct cfg80211_ops r92su_cfg80211_ops = {
 	.update_mgmt_frame_registrations = NULL,
 	.tdls_mgmt = NULL,
 	.tdls_oper = NULL,
+	.set_power_mgmt = NULL,
 };
 
 /**
@@ -1075,7 +1076,7 @@ drop:
  * @len:      frame length in bytes
  *
  * Allocates an sk_buff, converts the 802.11 frame to Ethernet format via
- * ieee80211_data_to_8023(), then calls netif_rx().
+ * ieee80211_data_to_8023(), then calls netif_receive_skb().
  *
  * Returns 0 on success, negative errno on failure (frame is dropped).
  */
@@ -1103,7 +1104,15 @@ int rust_helper_rx_deliver_80211(struct net_device *ndev,
 	skb->protocol = eth_type_trans(skb, ndev);
 	ndev->stats.rx_packets++;
 	ndev->stats.rx_bytes += skb->len;
-	netif_rx(skb);
+	/* netif_receive_skb() consumes the skb unconditionally.  NET_RX_SUCCESS
+	 * (0) and NET_RX_DROP (1) are both expected outcomes; only log values
+	 * outside that range as they indicate something truly unexpected.
+	 */
+	ret = netif_receive_skb(skb);
+	if (ret != 0 && ret != 1)
+		netdev_err(ndev, "netif_receive_skb unexpected return: %d\n", ret);
+	else
+	    netdev_err(ndev, "netif_receive_skb expected return: %d\n", ret);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(rust_helper_rx_deliver_80211);
@@ -1523,6 +1532,20 @@ void rust_helper_set_cfg80211_ops_tdls_oper(
 EXPORT_SYMBOL_GPL(rust_helper_set_cfg80211_ops_tdls_oper);
 
 /**
+ * rust_helper_set_cfg80211_ops_set_power_mgmt - set the .set_power_mgmt callback.
+ *
+ * Configure WLAN power management. Called when userspace (wpa_supplicant)
+ * enables or disables power save mode.
+ */
+void rust_helper_set_cfg80211_ops_set_power_mgmt(
+	int (*fn)(struct wiphy *wiphy, struct net_device *ndev,
+		  bool enabled, int timeout))
+{
+	r92su_cfg80211_ops.set_power_mgmt = fn;
+}
+EXPORT_SYMBOL_GPL(rust_helper_set_cfg80211_ops_set_power_mgmt);
+
+/**
  * rust_helper_cfg80211_mgmt_tx_status - report mgmt frame tx status.
  *
  * Called from Rust after tx attempt to inform cfg80211/wpa_supplicant
@@ -1722,15 +1745,28 @@ extern const struct file_operations r92su_debugfs_eeprom_fops;
 extern const struct file_operations r92su_debugfs_eeprom_raw_fops;
 extern const struct file_operations r92su_debugfs_hw_iowrite_fops;
 
-/* Stub debugfs read functions for files not yet fully implemented */
+/* Forward declarations of Rust FFI functions */
+extern size_t r92su_debugfs_sta_table(void *dev_ptr, char *buf, size_t buf_size);
+extern size_t r92su_debugfs_connected_bss(void *dev_ptr, char *buf, size_t buf_size);
+extern size_t r92su_debugfs_eeprom(void *dev_ptr, char *buf, size_t buf_size);
+extern size_t r92su_debugfs_eeprom_raw(void *dev_ptr, char *buf, size_t buf_size);
+extern size_t r92su_debugfs_hw_ioread(void *dev_ptr, char *buf, size_t buf_size);
+extern int r92su_debugfs_hw_iowrite(void *dev_ptr, const char *buf, size_t buf_len);
+
+/* Debugfs read functions implemented in Rust */
 static ssize_t r92su_debugfs_hw_ioread_read(struct file *file,
 					    char __user *userbuf,
 					    size_t count, loff_t *ppos)
 {
-	char buf[128];
-	int len = 0;
+	char *buf;
+	size_t len;
+	void *dev = file->private_data;
 
-	len = snprintf(buf, sizeof(buf), "(debug ring read not implemented)\n");
+	buf = vzalloc(4096);
+	if (!buf)
+		return -ENOMEM;
+
+	len = r92su_debugfs_hw_ioread(dev, buf, 4096);
 	return simple_read_from_buffer(userbuf, count, ppos, buf, len);
 }
 
@@ -1738,22 +1774,28 @@ static ssize_t r92su_debugfs_hw_iowrite_write(struct file *file,
 					      const char __user *userbuf,
 					      size_t count, loff_t *ppos)
 {
-	char buf[64];
-	u32 reg, val;
-	int n;
+	char *buf;
+	int ret;
+	void *dev = file->private_data;
 
-	if (count > sizeof(buf) - 1)
-		count = sizeof(buf) - 1;
+	if (count > 128)
+		return -E2BIG;
 
-	if (copy_from_user(buf, userbuf, count))
+	buf = vzalloc(count + 1);
+	if (!buf)
+		return -ENOMEM;
+
+	if (copy_from_user(buf, userbuf, count)) {
+		vfree(buf);
 		return -EFAULT;
+	}
 	buf[count] = '\0';
 
-	/* Parse "0xADDR 0xVALUE" */
-	n = sscanf(buf, "0x%x 0x%x", &reg, &val);
-	if (n != 2)
-		return -EINVAL;
+	ret = r92su_debugfs_hw_iowrite(dev, buf, count);
+	vfree(buf);
 
+	if (ret < 0)
+		return ret;
 	return count;
 }
 
@@ -1761,10 +1803,15 @@ static ssize_t r92su_debugfs_sta_table_read(struct file *file,
 					    char __user *userbuf,
 					    size_t count, loff_t *ppos)
 {
-	char buf[1024];
-	int len = 0;
+	char *buf;
+	size_t len;
+	void *dev = file->private_data;
 
-	len = snprintf(buf, sizeof(buf), "(station table read not implemented)\n");
+	buf = vzalloc(2048);
+	if (!buf)
+		return -ENOMEM;
+
+	len = r92su_debugfs_sta_table(dev, buf, 2048);
 	return simple_read_from_buffer(userbuf, count, ppos, buf, len);
 }
 
@@ -1772,10 +1819,15 @@ static ssize_t r92su_debugfs_connected_bss_read(struct file *file,
 						char __user *userbuf,
 						size_t count, loff_t *ppos)
 {
-	char buf[512];
-	int len = 0;
+	char *buf;
+	size_t len;
+	void *dev = file->private_data;
 
-	len = snprintf(buf, sizeof(buf), "(connected bss read not implemented)\n");
+	buf = vzalloc(1024);
+	if (!buf)
+		return -ENOMEM;
+
+	len = r92su_debugfs_connected_bss(dev, buf, 1024);
 	return simple_read_from_buffer(userbuf, count, ppos, buf, len);
 }
 
@@ -1783,10 +1835,15 @@ static ssize_t r92su_debugfs_eeprom_read(struct file *file,
 					 char __user *userbuf,
 					 size_t count, loff_t *ppos)
 {
-	char buf[1024];
-	int len = 0;
+	char *buf;
+	size_t len;
+	void *dev = file->private_data;
 
-	len = snprintf(buf, sizeof(buf), "(eeprom read not implemented)\n");
+	buf = vzalloc(1024);
+	if (!buf)
+		return -ENOMEM;
+
+	len = r92su_debugfs_eeprom(dev, buf, 1024);
 	return simple_read_from_buffer(userbuf, count, ppos, buf, len);
 }
 
@@ -1794,10 +1851,15 @@ static ssize_t r92su_debugfs_eeprom_raw_read(struct file *file,
 					     char __user *userbuf,
 					     size_t count, loff_t *ppos)
 {
-	char buf[1024];
-	int len = 0;
+	char *buf;
+	size_t len;
+	void *dev = file->private_data;
 
-	len = snprintf(buf, sizeof(buf), "(eeprom raw read not implemented)\n");
+	buf = vzalloc(128);
+	if (!buf)
+		return -ENOMEM;
+
+	len = r92su_debugfs_eeprom_raw(dev, buf, 128);
 	return simple_read_from_buffer(userbuf, count, ppos, buf, len);
 }
 
